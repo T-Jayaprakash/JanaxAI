@@ -1,0 +1,99 @@
+import { attachAssetsToConversation, getAssets } from "./assets";
+import { getConfig } from "./config";
+import {
+  addMessage,
+  DEFAULT_TITLE,
+  getBaseVersion,
+  getConversation,
+  listVersions,
+  renameConversation,
+  type Message,
+} from "./conversations";
+import { createJob, toPublicJob, type PublicJob } from "./jobs";
+import { getPlanner } from "./planner";
+import { buildTimeline, type TimelineAsset } from "./timeline";
+
+export class ChatError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+  }
+}
+
+function titleFrom(text: string): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (!clean) return DEFAULT_TITLE;
+  return clean.length > 48 ? `${clean.slice(0, 45).trimEnd()}…` : clean;
+}
+
+/**
+ * Handles one user turn: store the message, plan, and either reply directly
+ * or queue a render job. Rendering happens in the worker process, so this
+ * returns quickly and the job keeps running if the browser closes.
+ */
+export async function handleUserMessage(conversationId: string, text: string, attachmentIds: string[]): Promise<{
+  messages: Message[];
+  job: PublicJob | null;
+}> {
+  const cfg = getConfig();
+  const conv = getConversation(conversationId);
+  if (!conv) throw new ChatError(404, "Conversation not found.");
+  const trimmed = text.trim().slice(0, 4000);
+  if (!trimmed && attachmentIds.length === 0) throw new ChatError(400, "Write a message or attach a file.");
+  if (attachmentIds.length > cfg.maxFilesPerMessage) {
+    throw new ChatError(400, `You can attach up to ${cfg.maxFilesPerMessage} files per message.`);
+  }
+  const unique = [...new Set(attachmentIds)];
+  const attachments = getAssets(unique);
+  if (attachments.length !== unique.length) throw new ChatError(400, "One of the attachments no longer exists. Please upload it again.");
+  for (const a of attachments) {
+    if (a.kind !== "upload" || (a.conversationId && a.conversationId !== conversationId)) {
+      throw new ChatError(403, "That attachment belongs to a different conversation.");
+    }
+  }
+  attachAssetsToConversation(unique, conversationId);
+
+  const userMsg = addMessage({ conversationId, role: "user", text: trimmed, attachments: unique, jobId: null, versionId: null });
+  if (conv.title === DEFAULT_TITLE && trimmed) renameConversation(conversationId, titleFrom(trimmed));
+
+  const base = getBaseVersion(conversationId);
+  const versions = listVersions(conversationId);
+  const planner = getPlanner();
+  const plan = await planner.plan({
+    text: trimmed,
+    attachments: attachments.map((a) => ({ id: a.id, name: a.originalName, mediaType: a.mediaType, duration: a.duration })),
+    baseSpec: base?.spec ?? null,
+    baseVersion: base ? { id: base.id, number: base.number } : null,
+    baseDuration: base?.duration ?? null,
+    versions: versions.map((v) => ({ id: v.id, number: v.number })),
+  });
+
+  if (plan.kind === "reply") {
+    const reply = addMessage({
+      conversationId, role: "assistant", text: plan.text, attachments: [], jobId: null, versionId: plan.showVersionId ?? null,
+    });
+    return { messages: [userMsg, reply], job: null };
+  }
+
+  const clipAssets = getAssets(plan.spec.clips.map((c) => c.assetId));
+  if (clipAssets.length !== new Set(plan.spec.clips.map((c) => c.assetId)).size) {
+    const reply = addMessage({
+      conversationId, role: "assistant",
+      text: "Some clips from the earlier version were deleted, so I can't revise it. Please upload the clips again.",
+      attachments: [], jobId: null, versionId: null,
+    });
+    return { messages: [userMsg, reply], job: null };
+  }
+  const assetMap = new Map<string, TimelineAsset>(
+    clipAssets.map((a) => [a.id, { id: a.id, name: a.originalName, mediaType: a.mediaType, duration: a.duration, width: a.width, height: a.height, hasAudio: a.hasAudio }]),
+  );
+  const timeline = buildTimeline(plan.spec, assetMap, cfg);
+  const job = createJob({
+    conversationId,
+    parentVersionId: plan.fresh ? null : (base?.id ?? null),
+    spec: plan.spec,
+    planInfo: { planner: planner.label, usesAI: planner.usesAI, changes: plan.changes, unsupported: plan.unsupported, notes: timeline.notes },
+    timeline,
+  });
+  const reply = addMessage({ conversationId, role: "assistant", text: plan.summary, attachments: [], jobId: job.id, versionId: null });
+  return { messages: [userMsg, reply], job: toPublicJob(job) };
+}

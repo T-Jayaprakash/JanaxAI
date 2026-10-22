@@ -2,16 +2,28 @@
 
 **Just tell it. It'll make the video.**
 
-JANUXAI is a conversational video editor. Upload clips, describe the video you want in chat, watch the real editing steps run, and get back an MP4 you can preview, download and revise by chatting.
+JANUXAI is a conversational creative assistant for creators and small businesses. You can chat with it like Claude, and it can:
 
-This is a private local prototype. It edits with FFmpeg on your own computer.
+- edit your clips into reels and ads
+- design posters, carousels and thumbnails
+- make animated intros and titles
+- plan content, captions, hashtags and posting times
+- understand voice notes in Tamil, Malayalam, Telugu, Hindi, English and other languages
+
+This is a private local prototype. Videos, designs and voice transcription all run on your own computer.
 
 ## Quick start
 
-Requirements: Node.js 20 or newer (tested on 22), npm, and FFmpeg with `ffprobe` on your `PATH` (`brew install ffmpeg` on macOS).
+Requirements:
+
+- Node.js 20 or newer (tested on 22) and npm
+- FFmpeg with `ffprobe` on your `PATH` (`brew install ffmpeg`)
+- Google Chrome, which renders designs and motion graphics
+- An AI engine: either Claude Code installed and signed in (`claude`), for local testing with your own Claude plan, or `ANTHROPIC_API_KEY` for production. See [docs/AI_PROVIDERS.md](docs/AI_PROVIDERS.md).
 
 ```bash
 npm install
+npm run setup:speech   # optional: local voice-note transcription (whisper.cpp + ~466 MB model)
 npm run dev
 ```
 
@@ -33,7 +45,17 @@ npm run lint
 npm run build && npm start   # production mode, still local
 ```
 
-## The MVP journey
+## Things to try
+
+- "What are the best times to post reels for my Trichy bakery this week? Suggest 3 Tamil songs for a Diwali sweets reel."
+- "Enaku oru Instagram poster venum: Trichy Sweets, Diwali 20% off till Nov 5, phone 98765 43210."
+- "Make a 5-slide carousel: 5 reasons to choose our gym", then "Make the colours darker."
+- "Make a 4-second animated intro with our name", then "Put that intro at the start of my reel."
+- Record a voice note in Tamil: "இந்த வீடியோவை செங்குத்தாக மாற்றி 15 வினாடிகளாக குறைக்கவும்."
+- Attach an MP3 you have the rights to and say "use this as background music, keep it soft."
+- "Plan my Instagram content for next week with captions and hashtags."
+
+## The video MVP journey
 
 1. Open JANUXAI and attach two or more clips (paperclip button, drag and drop, or paste).
 2. Type "Combine these clips into a 15-second vertical reel" and press Enter.
@@ -45,7 +67,18 @@ npm run build && npm start   # production mode, still local
 
 ## What works today
 
-The chat understands these requests:
+With an AI engine (Claude), you can ask for anything in your own words and language, and JANUXAI uses these actions:
+
+| Action | Output |
+| --- | --- |
+| Edit video | FFmpeg render: cuts, reframing, length, transitions, colour looks, audio, fades, background music |
+| Create design | PNG posters, carousels (2–10 slides), thumbnails, stories, flyers and banners, written as HTML/CSS and rendered in Chrome |
+| Motion graphic | MP4 intros, outros, titles and promo animations, from CSS animations rendered frame by frame |
+| Brand kit | Saves the logo, business name, contacts, colours and audience notes, which every design reuses |
+
+Written answers (plans, captions, hashtags, scripts, posting schedules) come straight from Claude. It asks for missing details (offer, price, logo, contact) before designing.
+
+Without an AI engine, the keyword planner still handles video edits. It understands these requests:
 
 | Area | Examples |
 | --- | --- |
@@ -73,9 +106,13 @@ Other features:
 
 ## Known limitations
 
-- **No AI model.** Planning is keyword-based (`src/lib/planner/rules.ts`). Every job card says "Rule-based planner (keyword matching, no AI model)". See [docs/AI_PROVIDERS.md](docs/AI_PROVIDERS.md) for adding an LLM planner.
+- **Testing on your own Claude plan isn't for customers.** The `claude-cli` engine uses your personal Claude login and is meant for local testing only. It refuses to run in production. Customers need the Claude API with an API key.
+- **No posting or analytics.** JANUXAI can't post to Instagram, YouTube or WhatsApp, or read account insights, so posting-time advice is general guidance.
+- **No music library.** Claude suggests songs, but you add licensed music in Instagram or YouTube, or upload a track you have the rights to.
+- **Burned-in captions and voiceover aren't available yet.** Text in designs and motion graphics works.
+- **Live trends need web search.** Claude can't see current trends unless the API engine runs with `JANUX_WEB_SEARCH=on`.
+- **Voice-note accuracy** depends on recording quality. The `small` Whisper model is a speed and accuracy trade-off; transcripts are shown so users can check them.
 - **No authentication.** It runs as a single local user and the server binds to `127.0.0.1`. Don't expose it to a network as-is.
-- **No captions or text overlays yet.** The FFmpeg build tested here has no `drawtext` or `libass`, and speech-to-text isn't configured.
 - **Basic shot selection.** When a target length is shorter than the footage, the middle part of each clip is used. There's no scene analysis.
 - **Small limits.** Output is capped at 180s and rendered at 1280 on the long edge by default (set `JANUX_OUTPUT_LONG_EDGE=1920` for 1080p).
 - **Single machine.** One worker processes one job at a time, and the rate limiter is in-memory.

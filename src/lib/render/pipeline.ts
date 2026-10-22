@@ -11,6 +11,7 @@ import { validateSpec } from "../spec";
 import { freeDiskBytes, getStorage } from "../storage";
 import { buildTimeline, type Timeline, type TimelineAsset } from "../timeline";
 import { assembleArgs, segmentArgs } from "./commands";
+import { processMotionJob } from "./motion";
 
 /**
  * Executes one render job end to end. Every stage update written here is
@@ -21,6 +22,7 @@ export async function processJob(jobId: string): Promise<void> {
   const storage = getStorage();
   const initial = getJob(jobId);
   if (!initial) return;
+  if (initial.kind === "motion") return processMotionJob(jobId);
   let stages: Stage[] = initial.stages;
   const startedMs = Date.now();
   const tmpKey = `tmp/${jobId}`;
@@ -56,7 +58,7 @@ export async function processJob(jobId: string): Promise<void> {
     // 1. Inspect inputs again — files may have been removed since upload.
     start("inspect");
     const spec = validateSpec(initial.spec);
-    const uniqueIds = [...new Set(spec.clips.map((c) => c.assetId))];
+    const uniqueIds = [...new Set([...spec.clips.map((c) => c.assetId), ...(spec.music ? [spec.music.assetId] : [])])];
     const assets = getAssets(uniqueIds);
     if (assets.length !== uniqueIds.length) {
       throw new MediaError("Some of the clips for this edit were deleted. Upload them again and retry.", "missing asset row", "missing_input");
@@ -70,7 +72,9 @@ export async function processJob(jobId: string): Promise<void> {
       const info = await probe(storage.absolutePath(a.storageKey));
       inputBytes += a.size;
       log.push(
-        a.mediaType === "image"
+        a.mediaType === "audio"
+          ? `${a.originalName}: music ${info.duration?.toFixed(1)}s, ${info.audioCodec}`
+          : a.mediaType === "image"
           ? `${a.originalName}: image ${info.width}×${info.height}`
           : `${a.originalName}: ${info.duration?.toFixed(1)}s, ${info.width}×${info.height}, ${info.videoCodec}${info.hasAudio ? ` + ${info.audioCodec} audio` : ", no audio"}`,
       );
@@ -90,7 +94,9 @@ export async function processJob(jobId: string): Promise<void> {
     // 2. Timeline (same deterministic function used for the chat preview).
     start("plan");
     const tAssets = new Map<string, TimelineAsset>(
-      assets.map((a) => [a.id, { id: a.id, name: a.originalName, mediaType: a.mediaType, duration: a.duration, width: a.width, height: a.height, hasAudio: a.hasAudio }]),
+      assets
+        .filter((a) => a.mediaType !== "audio")
+        .map((a) => [a.id, { id: a.id, name: a.originalName, mediaType: a.mediaType as "video" | "image", duration: a.duration, width: a.width, height: a.height, hasAudio: a.hasAudio }]),
     );
     const timeline: Timeline = buildTimeline(spec, tAssets, cfg);
     setStage("plan", {}, { timeline });
@@ -123,7 +129,15 @@ export async function processJob(jobId: string): Promise<void> {
     // 4. Assemble with transitions, look, audio and fades.
     start("render");
     const outFile = path.join(tmpDir, "output.mp4");
-    const { args, expectedDuration } = assembleArgs({ inputs: segPaths, durations, output: outFile, spec, transition: timeline.transition });
+    const musicAsset = spec.music ? byId.get(spec.music.assetId) : undefined;
+    const { args, expectedDuration } = assembleArgs({
+      inputs: segPaths,
+      durations,
+      output: outFile,
+      spec,
+      transition: timeline.transition,
+      musicPath: musicAsset ? storage.absolutePath(musicAsset.storageKey) : undefined,
+    });
     await ffmpeg(args, {
       shouldCancel,
       onProgress: (sec) => progress("render", sec / expectedDuration, `Encoded ${Math.min(sec, expectedDuration).toFixed(1)}s of ${expectedDuration.toFixed(1)}s`),
@@ -135,6 +149,7 @@ export async function processJob(jobId: string): Promise<void> {
         spec.look !== "none" ? `${spec.look} look` : null,
         spec.audio.keepOriginal ? (spec.audio.volume !== 1 ? `audio ×${spec.audio.volume}` : "original audio") : "audio muted",
         spec.fadeInOut ? "fade in/out" : null,
+        spec.music ? `music: ${byId.get(spec.music.assetId)?.originalName}` : null,
       ]
         .filter(Boolean)
         .join(" · "),
@@ -159,6 +174,7 @@ export async function processJob(jobId: string): Promise<void> {
     // 6. Store output, thumbnail and version.
     start("preview");
     storage.ensureDir("outputs");
+    storage.ensureDir("thumbs");
     const assetId = newId("ast");
     const outKey = `outputs/${assetId}.mp4`;
     const thumbKey = `thumbs/${assetId}.jpg`;
@@ -224,7 +240,7 @@ export async function processJob(jobId: string): Promise<void> {
   }
 }
 
-function recordUsage(job: Job, u: { renderMs: number; inputBytes: number; outputBytes: number; outputSeconds: number; succeeded: boolean }) {
+export function recordUsage(job: Job, u: { renderMs: number; inputBytes: number; outputBytes: number; outputSeconds: number; succeeded: boolean }) {
   try {
     getDb()
       .prepare(

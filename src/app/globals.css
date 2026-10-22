@@ -34,10 +34,13 @@ body {
   background: color-mix(in srgb, var(--color-accent) 35%, transparent);
 }
 
-:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-  border-radius: 6px;
+/* In a layer so utilities (e.g. focus-visible:outline-none) can override it. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
 }
 
 /* Thin, quiet scrollbars. */
@@ -80,4 +83,103 @@ body {
   .animate-spin {
     animation: none !important;
   }
+}
+
+/* Assistant Markdown */
+.janux-md > * + * {
+  margin-top: 0.7em;
+}
+.janux-md h1,
+.janux-md h2,
+.janux-md h3 {
+  font-weight: 600;
+  line-height: 1.3;
+  margin-top: 1.1em;
+}
+.janux-md h1 {
+  font-size: 1.25em;
+}
+.janux-md h2 {
+  font-size: 1.12em;
+}
+.janux-md h3 {
+  font-size: 1em;
+}
+.janux-md ul,
+.janux-md ol {
+  padding-left: 1.3em;
+}
+.janux-md ul {
+  list-style: disc;
+}
+.janux-md ol {
+  list-style: decimal;
+}
+.janux-md li + li {
+  margin-top: 0.25em;
+}
+.janux-md strong {
+  font-weight: 600;
+  color: var(--color-ink);
+}
+.janux-md code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: var(--color-card-2);
+  padding: 0.1em 0.35em;
+  border-radius: 6px;
+}
+.janux-md pre {
+  background: var(--color-bg-2);
+  border: 1px solid var(--color-line);
+  border-radius: 12px;
+  padding: 0.8em 1em;
+  overflow-x: auto;
+}
+.janux-md pre code {
+  background: none;
+  padding: 0;
+}
+.janux-md table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92em;
+  display: block;
+  overflow-x: auto;
+}
+.janux-md th,
+.janux-md td {
+  border: 1px solid var(--color-line);
+  padding: 0.45em 0.7em;
+  text-align: left;
+  vertical-align: top;
+}
+.janux-md th {
+  background: var(--color-card);
+  font-weight: 600;
+}
+.janux-md blockquote {
+  border-left: 3px solid var(--color-accent);
+  padding-left: 0.9em;
+  color: var(--color-muted);
+}
+.janux-md hr {
+  border-color: var(--color-line);
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+.typing-caret::after {
+  content: "▍";
+  margin-left: 2px;
+  color: var(--color-accent);
+  animation: blink 1s steps(1) infinite;
+}
+/* Keep single line breaks (captions, addresses, poems) the way Claude wrote them. */
+.janux-md p,
+.janux-md li {
+  white-space: pre-line;
 }

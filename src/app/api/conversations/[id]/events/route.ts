@@ -1,4 +1,4 @@
-import { getConversation, getSnapshot } from "@/lib/conversations";
+import { getConversation, getSnapshot, messagesUpdatedSince } from "@/lib/conversations";
 import { dynamic, jsonError } from "@/lib/http";
 import { isWorkerAlive, jobsUpdatedSince, toPublicJob } from "@/lib/jobs";
 
@@ -13,6 +13,8 @@ export async function GET(req: Request, ctx: RouteContext<"/api/conversations/[i
   if (!getConversation(id)) return jsonError(404, "Conversation not found.");
   const encoder = new TextEncoder();
   let since = Number(new URL(req.url).searchParams.get("since")) || 0;
+  let msgSince = Date.now();
+  const seenStatus = new Map<string, string>();
   let timer: ReturnType<typeof setInterval> | undefined;
   let lastWorker: boolean | null = null;
   let ticks = 0;
@@ -39,6 +41,14 @@ export async function GET(req: Request, ctx: RouteContext<"/api/conversations/[i
           since = Math.max(since, job.updatedAt);
           send("job", toPublicJob(job));
           if (job.state === "completed") terminal = true;
+        }
+        // Assistant replies stream in as message updates.
+        for (const m of messagesUpdatedSince(id, msgSince)) {
+          msgSince = Math.max(msgSince, m.updatedAt);
+          send("message", m);
+          const key = `${m.meta.status}:${(m.meta.designs as unknown[] | undefined)?.length ?? 0}:${(m.meta.jobIds as unknown[] | undefined)?.length ?? 0}:${m.versionId}`;
+          if (seenStatus.get(m.id) !== key && (m.meta.designs || m.meta.jobIds || m.meta.status === "done" || m.versionId)) terminal = true;
+          seenStatus.set(m.id, key);
         }
         if (terminal) send("snapshot", getSnapshot(id));
         const alive = isWorkerAlive();

@@ -127,7 +127,9 @@ export function parseRemoveClip(t: string): number | null {
 export function detectUnsupported(t: string): string[] {
   const out: string[] = [];
   if (/caption|subtitle|\bsubs\b|transcri/.test(t)) out.push("Captions and subtitles need a speech-to-text provider, which isn't configured yet.");
-  if (/music|\bsong\b|\bbgm\b|soundtrack/.test(t)) out.push("Background music isn't available yet — there's no music library configured.");
+  if (/music|\bsong\b|\bbgm\b|soundtrack/.test(t)) {
+    out.push("I don't have a music library yet. Attach an MP3, M4A or WAV of a track you have the rights to and I'll mix it in.");
+  }
   if (/voice ?over|narrat|\bdub|translat/.test(t)) out.push("Voiceover, dubbing and translation aren't available yet.");
   if (/\btext\b|\btitles?\b|overlay|\blogo\b|watermark|sticker|emoji/.test(t)) out.push("Text, title and logo overlays aren't available yet.");
   if (/slow ?mo|slow motion|speed (it )?up|\bfaster\b|timelapse|\d(\.\d)?x speed/.test(t)) out.push("Speed changes aren't available yet.");
@@ -173,6 +175,10 @@ function parseVersionNav(t: string, input: PlannerInput): PlanResult | null {
 }
 
 function defaultSpec(assetIds: string[]): EditSpec {
+  return { ...baseDefaults(assetIds), music: null };
+}
+
+function baseDefaults(assetIds: string[]): Omit<EditSpec, "music"> {
   return {
     version: 1,
     clips: assetIds.map((assetId) => ({ assetId, in: null, out: null })),
@@ -192,7 +198,11 @@ export function planWithRules(input: PlannerInput): PlanResult {
   if (nav) return nav;
 
   const base = input.baseSpec;
-  const attachments = input.attachments;
+  const musicFiles = input.attachments.filter((a) => a.mediaType === "audio");
+  const attachments = input.attachments.filter((a) => a.mediaType !== "audio");
+  if (!base && attachments.length === 0 && musicFiles.length > 0) {
+    return { kind: "reply", text: "Got the music. Now attach the video clips or photos you want it under, and tell me what kind of video to make." };
+  }
   if (!base && attachments.length === 0) {
     if (!t || /^(hi|hey|hello|vanakkam|hai)\b/.test(t)) {
       return { kind: "reply", text: "Vanakkam! Attach your clips with the paperclip button and tell me what kind of video you want — for example, \"Combine these into a 15-second vertical reel.\"" };
@@ -294,7 +304,22 @@ export function planWithRules(input: PlannerInput): PlanResult {
     changes.push(audio.volumeFactor > 1 ? "audio louder" : "audio quieter");
   }
 
-  const unsupported = detectUnsupported(t);
+  if (musicFiles.length > 0) {
+    spec.music = { assetId: musicFiles[0].id, volume: spec.music?.volume ?? 0.8 };
+    changes.push(`background music → ${musicFiles[0].name}`);
+  } else if (spec.music && /(remove|no|without|stop) (the )?(music|song|bgm)/.test(t)) {
+    spec.music = null;
+    changes.push("removed the background music");
+  } else if (spec.music && /(music|song|bgm) (louder|up)|louder (music|song|bgm)/.test(t)) {
+    spec.music = { ...spec.music, volume: Math.min(2, Math.round(spec.music.volume * 1.4 * 100) / 100) };
+    changes.push("music louder");
+  } else if (spec.music && /(music|song|bgm) (quieter|softer|down|lower)|(quieter|softer|lower) (music|song|bgm)/.test(t)) {
+    spec.music = { ...spec.music, volume: Math.max(0.05, Math.round(spec.music.volume * 0.6 * 100) / 100) };
+    changes.push("music quieter");
+  }
+
+  const mentionsMusic = /music|\bsong\b|\bbgm\b|soundtrack/.test(t);
+  const unsupported = detectUnsupported(t).filter((u) => !(u.startsWith("I don't have a music library") && (musicFiles.length > 0 || (spec.music && mentionsMusic))));
 
   if (!fresh && changes.length === 0) {
     if (unsupported.length) {

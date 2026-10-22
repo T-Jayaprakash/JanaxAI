@@ -17,9 +17,35 @@ export interface ConversationSummary {
 export interface AppStatus {
   worker: { alive: boolean };
   planner: { label: string; usesAI: boolean };
+  assistant: { id: string; label: string; devOnly: boolean } | null;
+  capabilities: { designs: boolean; voiceNotes: boolean };
   limits: { maxUploadMB: number; maxFilesPerMessage: number; maxClipSeconds: number; maxOutputSeconds: number };
   usage: { renders: number; succeeded: number; failed: number; renderSeconds: number; outputSeconds: number; inputBytes: number; outputBytes: number };
   storage: { usedBytes: number; freeBytes: number };
+}
+
+export interface BrandKitView {
+  businessName: string;
+  tagline: string;
+  phone: string;
+  whatsapp: string;
+  email: string;
+  website: string;
+  instagram: string;
+  address: string;
+  primaryColor: string;
+  secondaryColor: string;
+  logoAssetId: string | null;
+  notes: string;
+}
+
+export interface ReplyMeta {
+  status?: "pending" | "streaming" | "done" | "error";
+  provider?: string;
+  activity?: { label: string; status: "running" | "done" | "failed" }[];
+  designs?: { title: string; kind: string; format: string; assetIds: string[] }[];
+  jobIds?: string[];
+  error?: string;
 }
 
 export class ApiError extends Error {
@@ -50,6 +76,9 @@ export const api = {
   cancelJob: (id: string) => call<{ job: PublicJob }>(`/api/jobs/${id}/cancel`, { method: "POST" }),
   retryJob: (id: string) => call<{ job: PublicJob }>(`/api/jobs/${id}/retry`, { method: "POST" }),
   status: () => call<AppStatus>("/api/status"),
+  stopReply: (messageId: string) => call(`/api/messages/${messageId}/stop`, { method: "POST" }),
+  getBrand: () => call<{ brand: BrandKitView; logo: PublicAsset | null }>("/api/brand"),
+  saveBrand: (patch: Partial<BrandKitView>) => call<{ brand: BrandKitView; logo: PublicAsset | null }>("/api/brand", { method: "PUT", body: JSON.stringify(patch) }),
   deleteAllData: () => call("/api/data", { method: "DELETE" }),
 };
 
@@ -58,10 +87,12 @@ export function uploadFile(
   file: File,
   conversationId: string | null,
   onProgress: (fraction: number) => void,
+  purpose: "media" | "voice" = "media",
 ): { promise: Promise<PublicAsset>; abort: () => void } {
   const xhr = new XMLHttpRequest();
   const params = new URLSearchParams({ name: file.name });
   if (conversationId) params.set("conversationId", conversationId);
+  if (purpose === "voice") params.set("purpose", "voice");
   const promise = new Promise<PublicAsset>((resolve, reject) => {
     xhr.open("POST", `/api/uploads?${params}`);
     xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");

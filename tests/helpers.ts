@@ -9,6 +9,8 @@ export function useTempDataDir(): string {
   closeDb();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "janux-test-"));
   process.env.JANUX_DATA_DIR = dir;
+  // Deterministic tests: never call an AI engine.
+  process.env.JANUX_AI = "rules";
   return dir;
 }
 

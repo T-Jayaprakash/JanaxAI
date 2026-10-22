@@ -3,6 +3,9 @@ import { getDb } from "@/lib/db";
 import { dynamic } from "@/lib/http";
 import { isWorkerAlive } from "@/lib/jobs";
 import { getPlanner } from "@/lib/planner";
+import { selectBackend } from "@/lib/agent/provider";
+import { chromePath } from "@/lib/graphics/render";
+import { isSpeechAvailable } from "@/lib/speech/transcribe";
 import { freeDiskBytes, storageBytesUsed } from "@/lib/storage";
 
 /** Real usage numbers for the Account panel — nothing here is estimated. */
@@ -21,6 +24,11 @@ export async function GET() {
   return Response.json({
     worker: { alive: isWorkerAlive() },
     planner: { label: planner.label, usesAI: planner.usesAI },
+    assistant: (() => {
+      const b = selectBackend();
+      return b ? { id: b.id, label: b.label, devOnly: b.devOnly } : null;
+    })(),
+    capabilities: { designs: !!chromePath(), voiceNotes: isSpeechAvailable() },
     limits: {
       maxUploadMB: Math.round(cfg.maxUploadBytes / 1048576),
       maxFilesPerMessage: cfg.maxFilesPerMessage,

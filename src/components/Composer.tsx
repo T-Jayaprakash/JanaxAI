@@ -1,18 +1,24 @@
 "use client";
 
-import { AlertCircle, ArrowUp, Film, ImageIcon, Loader2, Mic, MicOff, Paperclip, X } from "lucide-react";
+import { AlertCircle, ArrowUp, AudioLines, Film, ImageIcon, Loader2, Mic, Music, Paperclip, Square, X } from "lucide-react";
 import { useEffect, useImperativeHandle, useRef, useState, useSyncExternalStore, type Ref } from "react";
 import { deleteUnsentUpload, formatBytes, formatDuration, uploadFile, type PublicAsset } from "@/lib/client/api";
 
 const VIDEO_EXT = ["mp4", "mov", "m4v", "webm", "mkv"];
 const IMAGE_EXT = ["jpg", "jpeg", "png", "webp"];
-const ACCEPT = [...VIDEO_EXT, ...IMAGE_EXT].map((e) => `.${e}`).join(",") + ",video/*,image/*";
+const AUDIO_EXT = ["mp3", "m4a", "aac", "wav", "ogg"];
+const ACCEPT = [...VIDEO_EXT, ...IMAGE_EXT, ...AUDIO_EXT].map((e) => `.${e}`).join(",") + ",video/*,image/*,audio/*";
+const MAX_VOICE_SECONDS = 180;
+
+const LANGUAGE_NAMES: Record<string, string> = {
+  ta: "Tamil", ml: "Malayalam", te: "Telugu", kn: "Kannada", hi: "Hindi", en: "English", mr: "Marathi", bn: "Bengali", gu: "Gujarati", ur: "Urdu",
+};
 
 interface Pending {
   localId: string;
   name: string;
   size: number;
-  kind: "video" | "image";
+  kind: "video" | "image" | "audio" | "voice";
   previewUrl: string;
   duration: number | null;
   progress: number;
@@ -28,30 +34,26 @@ export interface ComposerHandle {
   addFiles: (files: FileList | File[]) => void;
 }
 
-interface SpeechRecognitionLike {
-  lang: string;
-  interimResults: boolean;
-  continuous: boolean;
-  start: () => void;
-  stop: () => void;
-  onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }>; resultIndex: number }) => void) | null;
-  onend: (() => void) | null;
-  onerror: (() => void) | null;
-}
-
-function getSpeechCtor(): (new () => SpeechRecognitionLike) | null {
-  if (typeof window === "undefined") return null;
-  const w = window as unknown as { SpeechRecognition?: new () => SpeechRecognitionLike; webkitSpeechRecognition?: new () => SpeechRecognitionLike };
-  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
-}
-
 const noopSubscribe = () => () => {};
+const canRecord = () => typeof window !== "undefined" && !!navigator.mediaDevices?.getUserMedia && typeof MediaRecorder !== "undefined";
+
+function pickRecorderType(): { mime: string; ext: string } {
+  for (const [mime, ext] of [
+    ["audio/webm;codecs=opus", "webm"],
+    ["audio/ogg;codecs=opus", "ogg"],
+    ["audio/mp4", "m4a"],
+  ] as const) {
+    if (MediaRecorder.isTypeSupported(mime)) return { mime, ext };
+  }
+  return { mime: "", ext: "webm" };
+}
 
 export function Composer({
   ref,
   disabled,
   maxUploadMB,
   maxFiles,
+  voiceNotes,
   ensureConversation,
   onSend,
 }: {
@@ -59,6 +61,8 @@ export function Composer({
   disabled?: boolean;
   maxUploadMB: number;
   maxFiles: number;
+  /** Whether the server can transcribe voice notes. */
+  voiceNotes: boolean;
   ensureConversation: () => Promise<string>;
   onSend: (text: string, attachments: PublicAsset[]) => Promise<boolean>;
 }) {
@@ -66,16 +70,26 @@ export function Composer({
   const [items, setItems] = useState<Pending[]>([]);
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [listening, setListening] = useState(false);
-  const speechSupported = useSyncExternalStore(noopSubscribe, () => !!getSpeechCtor(), () => false);
+  const [recording, setRecording] = useState<{ startedAt: number } | null>(null);
+  const [now, setNow] = useState(0);
+  const recordSupported = useSyncExternalStore(noopSubscribe, canRecord, () => false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
   const itemsRef = useRef(items);
   useEffect(() => {
     itemsRef.current = items;
   });
   useEffect(() => () => itemsRef.current.forEach((i) => URL.revokeObjectURL(i.previewUrl)), []);
+
+  useEffect(() => {
+    if (!recording) return;
+    const t = setInterval(() => {
+      setNow(Date.now());
+      if (Date.now() - recording.startedAt > MAX_VOICE_SECONDS * 1000) recorderRef.current?.stop();
+    }, 250);
+    return () => clearInterval(t);
+  }, [recording]);
 
   // Auto-grow the textarea up to a limit.
   useEffect(() => {
@@ -87,52 +101,91 @@ export function Composer({
 
   const patch = (localId: string, p: Partial<Pending>) => setItems((list) => list.map((i) => (i.localId === localId ? { ...i, ...p } : i)));
 
+  const upload = async (entries: { file: File; item: Pending; purpose: "media" | "voice" }[]) => {
+    if (!entries.length) return;
+    setItems((cur) => [...cur, ...entries.map((e) => e.item)]);
+    let conversationId: string;
+    try {
+      conversationId = await ensureConversation();
+    } catch {
+      entries.forEach(({ item }) => patch(item.localId, { status: "error", error: "Couldn't start a conversation." }));
+      return;
+    }
+    for (const { file, item, purpose } of entries) {
+      const up = uploadFile(file, conversationId, (p) => patch(item.localId, { progress: p, status: p >= 1 ? "processing" : "uploading" }), purpose);
+      patch(item.localId, { abort: up.abort });
+      up.promise
+        .then((asset) => patch(item.localId, { status: "ready", asset, duration: asset.duration, progress: 1, abort: undefined }))
+        .catch((err: Error) => patch(item.localId, { status: "error", error: err.message, abort: undefined }));
+    }
+  };
+
   const addFiles = async (files: FileList | File[]) => {
     setNotice(null);
     const list = Array.from(files);
     const room = maxFiles - itemsRef.current.length;
     if (list.length > room) setNotice(`You can attach up to ${maxFiles} files per message.`);
-    const accepted: { file: File; item: Pending }[] = [];
+    const accepted: { file: File; item: Pending; purpose: "media" }[] = [];
     for (const file of list.slice(0, Math.max(room, 0))) {
       const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
-      const kind = VIDEO_EXT.includes(ext) ? "video" : IMAGE_EXT.includes(ext) ? "image" : null;
+      const kind = VIDEO_EXT.includes(ext) ? "video" : IMAGE_EXT.includes(ext) ? "image" : AUDIO_EXT.includes(ext) ? "audio" : null;
       if (!kind) {
-        setNotice(`"${file.name}" isn't a supported video or image file.`);
+        setNotice(`"${file.name}" isn't a supported video, image or audio file.`);
         continue;
       }
       if (file.size > maxUploadMB * 1048576) {
         setNotice(`"${file.name}" is larger than the ${maxUploadMB} MB limit.`);
         continue;
       }
-      const item: Pending = {
-        localId: crypto.randomUUID(),
-        name: file.name,
-        size: file.size,
-        kind,
-        previewUrl: URL.createObjectURL(file),
-        duration: null,
-        progress: 0,
-        status: "uploading",
-      };
-      accepted.push({ file, item });
+      accepted.push({
+        file,
+        purpose: "media",
+        item: { localId: crypto.randomUUID(), name: file.name, size: file.size, kind, previewUrl: URL.createObjectURL(file), duration: null, progress: 0, status: "uploading" },
+      });
     }
-    if (!accepted.length) return;
-    setItems((cur) => [...cur, ...accepted.map((a) => a.item)]);
+    await upload(accepted);
+  };
 
-    let conversationId: string;
-    try {
-      conversationId = await ensureConversation();
-    } catch {
-      accepted.forEach(({ item }) => patch(item.localId, { status: "error", error: "Couldn't start a conversation." }));
+  const startRecording = async () => {
+    setNotice(null);
+    if (itemsRef.current.length >= maxFiles) {
+      setNotice(`You can attach up to ${maxFiles} files per message.`);
       return;
     }
-    for (const { file, item } of accepted) {
-      const up = uploadFile(file, conversationId, (p) => patch(item.localId, { progress: p, status: p >= 1 ? "processing" : "uploading" }));
-      patch(item.localId, { abort: up.abort });
-      up.promise
-        .then((asset) => patch(item.localId, { status: "ready", asset, duration: asset.duration, progress: 1, abort: undefined }))
-        .catch((err: Error) => patch(item.localId, { status: "error", error: err.message, abort: undefined }));
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      setNotice("Microphone access was blocked. Allow it in your browser to record a voice note.");
+      return;
     }
+    const { mime, ext } = pickRecorderType();
+    const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+    const chunks: Blob[] = [];
+    rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    rec.onstop = () => {
+      stream.getTracks().forEach((t) => t.stop());
+      setRecording(null);
+      const type = (rec.mimeType || mime || "audio/webm").split(";")[0];
+      const blob = new Blob(chunks, { type });
+      if (blob.size < 2000) {
+        setNotice("That recording was too short.");
+        return;
+      }
+      const stamp = new Date().toTimeString().slice(0, 8).replace(/:/g, "");
+      const file = new File([blob], `voice-note-${stamp}.${ext}`, { type });
+      void upload([
+        {
+          file,
+          purpose: "voice",
+          item: { localId: crypto.randomUUID(), name: "Voice note", size: file.size, kind: "voice", previewUrl: URL.createObjectURL(file), duration: null, progress: 0, status: "uploading" },
+        },
+      ]);
+    };
+    recorderRef.current = rec;
+    rec.start();
+    setNow(Date.now());
+    setRecording({ startedAt: Date.now() });
   };
 
   const remove = (i: Pending) => {
@@ -156,11 +209,10 @@ export function Composer({
 
   const uploading = items.some((i) => i.status === "uploading" || i.status === "processing");
   const ready = items.filter((i) => i.status === "ready");
-  const canSend = !disabled && !sending && !uploading && (text.trim().length > 0 || ready.length > 0);
+  const canSend = !disabled && !sending && !uploading && !recording && (text.trim().length > 0 || ready.length > 0);
 
   const submit = async () => {
     if (!canSend) return;
-    recognitionRef.current?.stop();
     setSending(true);
     const ok = await onSend(text.trim(), ready.map((i) => i.asset!));
     setSending(false);
@@ -172,47 +224,29 @@ export function Composer({
     }
   };
 
-  const toggleVoice = () => {
-    if (listening) {
-      recognitionRef.current?.stop();
-      return;
-    }
-    const Ctor = getSpeechCtor();
-    if (!Ctor) return;
-    const rec = new Ctor();
-    let lang = "en-IN";
-    try {
-      lang = localStorage.getItem("janux.voiceLang") || "en-IN";
-    } catch {}
-    rec.lang = lang;
-    rec.interimResults = false;
-    rec.continuous = true;
-    const startText = text;
-    let finalText = "";
-    rec.onresult = (e) => {
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) finalText += e.results[i][0].transcript;
-      }
-      setText(`${startText}${startText && finalText ? " " : ""}${finalText.trim()}`);
-    };
-    rec.onend = () => setListening(false);
-    rec.onerror = () => {
-      setListening(false);
-      setNotice("Voice input stopped. Check microphone permission and try again.");
-    };
-    recognitionRef.current = rec;
-    rec.start();
-    setListening(true);
-  };
+  const recSeconds = recording ? Math.max(0, Math.floor((now - recording.startedAt) / 1000)) : 0;
 
   return (
     <div className="rounded-3xl border border-line bg-card shadow-[0_-8px_30px_rgba(0,0,0,0.35)] focus-within:border-accent/40">
       {items.length > 0 && (
         <ul className="flex gap-2 overflow-x-auto px-3 pt-3" aria-label="Attachments">
           {items.map((i) => (
-            <li key={i.localId} className="relative w-28 shrink-0 overflow-hidden rounded-xl border border-line bg-bg-2">
+            <li key={i.localId} className={`relative shrink-0 overflow-hidden rounded-xl border border-line bg-bg-2 ${i.kind === "voice" ? "w-56" : "w-28"}`}>
               <div className="relative h-16 bg-black">
-                {i.asset?.thumbnailUrl ? (
+                {i.kind === "voice" || i.kind === "audio" ? (
+                  <div className="flex h-full items-center gap-2 px-3">
+                    {i.kind === "voice" ? <AudioLines size={20} className="shrink-0 text-accent" /> : <Music size={20} className="shrink-0 text-accent" />}
+                    <p className="line-clamp-2 text-[11px] leading-snug text-muted">
+                      {i.kind === "voice"
+                        ? i.status === "ready"
+                          ? `“${i.asset?.transcript}”`
+                          : i.status === "error"
+                            ? ""
+                            : "Listening to your voice note…"
+                        : "Background music"}
+                    </p>
+                  </div>
+                ) : i.asset?.thumbnailUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={i.asset.thumbnailUrl} alt="" className="h-full w-full object-cover" />
                 ) : i.kind === "image" ? (
@@ -228,7 +262,7 @@ export function Composer({
                     className="h-full w-full object-cover"
                   />
                 )}
-                {(i.status === "uploading" || i.status === "processing") && (
+                {(i.status === "uploading" || i.status === "processing") && i.kind !== "voice" && (
                   <div className="absolute inset-0 grid place-items-center bg-black/55">
                     <span className="flex items-center gap-1 text-[10px] text-ink">
                       <Loader2 size={12} className="animate-spin" />
@@ -257,8 +291,18 @@ export function Composer({
               )}
               <div className="px-2 py-1">
                 <p className="flex items-center gap-1 truncate text-[11px]" title={i.error ?? i.name}>
-                  {i.kind === "image" ? <ImageIcon size={10} className="shrink-0 text-muted" /> : <Film size={10} className="shrink-0 text-muted" />}
-                  <span className="truncate">{i.name}</span>
+                  {i.kind === "image" ? (
+                    <ImageIcon size={10} className="shrink-0 text-muted" />
+                  ) : i.kind === "video" ? (
+                    <Film size={10} className="shrink-0 text-muted" />
+                  ) : i.status === "processing" ? (
+                    <Loader2 size={10} className="shrink-0 animate-spin text-muted" />
+                  ) : null}
+                  <span className="truncate">
+                    {i.name}
+                    {i.kind === "voice" && i.asset?.language ? ` · ${LANGUAGE_NAMES[i.asset.language] ?? i.asset.language}` : ""}
+                    {i.kind === "voice" && i.status === "processing" ? " · transcribing" : ""}
+                  </span>
                 </p>
                 <p className={`truncate text-[10px] ${i.status === "error" ? "text-danger" : "text-faint"}`} title={i.error}>
                   {i.status === "error" ? i.error : [formatDuration(i.duration), formatBytes(i.size)].filter(Boolean).join(" · ")}
@@ -275,76 +319,93 @@ export function Composer({
         </p>
       )}
 
-      <div className="flex items-end gap-1.5 p-2">
-        <input
-          ref={fileRef}
-          type="file"
-          multiple
-          accept={ACCEPT}
-          className="hidden"
-          onChange={(e) => {
-            if (e.target.files) void addFiles(e.target.files);
-            e.target.value = "";
-          }}
-        />
-        <button
-          type="button"
-          onClick={() => fileRef.current?.click()}
-          disabled={disabled}
-          aria-label="Attach videos or images"
-          title="Attach videos or images"
-          className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-muted hover:bg-card-2 hover:text-ink disabled:opacity-40"
-        >
-          <Paperclip size={19} />
-        </button>
-        <label htmlFor="composer-input" className="sr-only">
-          Describe the video you want
-        </label>
-        <textarea
-          id="composer-input"
-          ref={textareaRef}
-          rows={1}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              void submit();
-            }
-          }}
-          onPaste={(e) => {
-            if (e.clipboardData.files.length) {
-              e.preventDefault();
-              void addFiles(e.clipboardData.files);
-            }
-          }}
-          placeholder={items.length ? "Describe the video you want…" : "Describe your video…"}
-          className="max-h-[200px] min-h-10 flex-1 resize-none bg-transparent px-1 py-2.5 text-[15px] leading-6 text-ink placeholder:text-faint focus:outline-none focus-visible:outline-none"
-        />
-        {speechSupported && (
+      {recording ? (
+        <div className="flex items-center gap-3 p-2 pl-4">
+          <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-danger" aria-hidden="true" />
+          <span className="flex-1 text-sm text-ink">
+            Recording… <span className="font-mono text-muted">{formatDuration(recSeconds) || "0.0s"}</span>
+            <span className="ml-2 hidden text-xs text-faint sm:inline">Speak in any language</span>
+          </span>
           <button
             type="button"
-            onClick={toggleVoice}
-            aria-label={listening ? "Stop voice input" : "Start voice input"}
-            aria-pressed={listening}
-            className={`grid h-10 w-10 shrink-0 place-items-center rounded-full ${
-              listening ? "bg-danger/20 text-danger" : "text-muted hover:bg-card-2 hover:text-ink"
-            }`}
+            onClick={() => recorderRef.current?.stop()}
+            className="inline-flex h-10 items-center gap-2 rounded-full bg-danger px-4 text-sm font-medium text-bg"
+            aria-label="Stop recording and attach voice note"
           >
-            {listening ? <MicOff size={18} /> : <Mic size={18} />}
+            <Square size={14} /> Done
           </button>
-        )}
-        <button
-          type="button"
-          onClick={() => void submit()}
-          disabled={!canSend}
-          aria-label="Send"
-          className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-accent text-bg transition-colors hover:bg-accent-2 disabled:bg-line disabled:text-faint"
-        >
-          {sending ? <Loader2 size={18} className="animate-spin" /> : <ArrowUp size={19} strokeWidth={2.4} />}
-        </button>
-      </div>
-      {uploading && <p className="px-4 pb-2 text-[11px] text-faint">Uploading… you can send once files finish checking.</p>}
+        </div>
+      ) : (
+        <div className="flex items-end gap-1.5 p-2">
+          <input
+            ref={fileRef}
+            type="file"
+            multiple
+            accept={ACCEPT}
+            className="hidden"
+            onChange={(e) => {
+              if (e.target.files) void addFiles(e.target.files);
+              e.target.value = "";
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            disabled={disabled}
+            aria-label="Attach videos, images or music"
+            title="Attach videos, images or music"
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-muted hover:bg-card-2 hover:text-ink disabled:opacity-40"
+          >
+            <Paperclip size={19} />
+          </button>
+          <label htmlFor="composer-input" className="sr-only">
+            Describe the video or design you want
+          </label>
+          <textarea
+            id="composer-input"
+            ref={textareaRef}
+            rows={1}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                void submit();
+              }
+            }}
+            onPaste={(e) => {
+              if (e.clipboardData.files.length) {
+                e.preventDefault();
+                void addFiles(e.clipboardData.files);
+              }
+            }}
+            placeholder={items.length ? "Add instructions…" : "Ask anything, or describe your video…"}
+            className="max-h-[200px] min-h-10 flex-1 resize-none bg-transparent px-1 py-2.5 text-[15px] leading-6 text-ink placeholder:text-faint focus:outline-none focus-visible:outline-none"
+          />
+          {recordSupported && voiceNotes && (
+            <button
+              type="button"
+              onClick={() => void startRecording()}
+              disabled={disabled}
+              aria-label="Record a voice note"
+              title="Record a voice note (any language)"
+              className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-muted hover:bg-card-2 hover:text-ink disabled:opacity-40"
+            >
+              <Mic size={18} />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => void submit()}
+            disabled={!canSend}
+            aria-label="Send"
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-accent text-bg transition-colors hover:bg-accent-2 disabled:bg-line disabled:text-faint"
+          >
+            {sending ? <Loader2 size={18} className="animate-spin" /> : <ArrowUp size={19} strokeWidth={2.4} />}
+          </button>
+        </div>
+      )}
+      {uploading && <p className="px-4 pb-2 text-[11px] text-faint">Uploading… you can send once files finish processing.</p>}
     </div>
   );
 }

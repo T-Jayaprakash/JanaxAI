@@ -1,8 +1,8 @@
 "use client";
 
-import { Film, Search, Trash2, X } from "lucide-react";
+import { Film, ImagePlus, Loader2, Search, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { api, formatBytes, type AppStatus, type ConversationSummary } from "@/lib/client/api";
+import { api, formatBytes, uploadFile, type AppStatus, type BrandKitView, type ConversationSummary, type PublicAsset } from "@/lib/client/api";
 
 function Sheet({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   useEffect(() => {
@@ -131,6 +131,8 @@ export function AccountPanel({ onClose, onDataDeleted }: { onClose: () => void; 
         </div>
       </section>
 
+      <BrandKitForm />
+
       <section className="mb-6">
         <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-faint">Usage (measured)</h3>
         {error && <p className="text-sm text-danger">{error}</p>}
@@ -157,7 +159,10 @@ export function AccountPanel({ onClose, onDataDeleted }: { onClose: () => void; 
           <ul className="space-y-1 text-xs text-muted">
             <li>Up to {status.limits.maxFilesPerMessage} files per message, {status.limits.maxUploadMB} MB each</li>
             <li>Clips up to {Math.round(status.limits.maxClipSeconds / 60)} min · output up to {status.limits.maxOutputSeconds}s</li>
-            <li>Planner: {status.planner.label}</li>
+            <li>Assistant: {status.assistant ? status.assistant.label : "off — add ANTHROPIC_API_KEY, or install Claude Code for local testing"}</li>
+            <li>Video planner fallback: {status.planner.label}</li>
+            <li>Designs: {status.capabilities.designs ? "Chrome renderer ready" : "needs Google Chrome"}</li>
+            <li>Voice notes: {status.capabilities.voiceNotes ? "local Whisper (any language)" : "run npm run setup:speech"}</li>
             <li>Video engine: FFmpeg on this computer</li>
           </ul>
         </section>
@@ -186,8 +191,8 @@ export function AccountPanel({ onClose, onDataDeleted }: { onClose: () => void; 
       <section>
         <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-faint">Privacy</h3>
         <p className="mb-3 text-xs leading-relaxed text-muted">
-          Your uploads and rendered videos are stored only in this app&apos;s data folder on this computer. Nothing is sent to external AI services. Deleting a
-          conversation deletes its files.
+          Uploads, voice notes and renders are stored only in this app&apos;s data folder on this computer, and voice notes are transcribed locally. Your
+          messages, the transcripts and the list of your files (names, not the files) are sent to Claude to write replies. Deleting a conversation deletes its files.
         </p>
         {confirmDelete ? (
           <div className="rounded-xl border border-danger/30 bg-danger/10 p-3 text-sm">
@@ -224,5 +229,147 @@ function Stat({ k, v, warn }: { k: string; v: string; warn?: boolean }) {
       <dt className="text-[11px] text-faint">{k}</dt>
       <dd className={warn ? "text-warn" : "text-ink"}>{v}</dd>
     </div>
+  );
+}
+
+const BRAND_FIELDS: { key: keyof BrandKitView; label: string; placeholder?: string; type?: string }[] = [
+  { key: "businessName", label: "Business name", placeholder: "Trichy Sweets" },
+  { key: "tagline", label: "Tagline", placeholder: "Taste of tradition" },
+  { key: "phone", label: "Phone", placeholder: "98765 43210", type: "tel" },
+  { key: "whatsapp", label: "WhatsApp", placeholder: "98765 43210", type: "tel" },
+  { key: "email", label: "Email", type: "email" },
+  { key: "website", label: "Website" },
+  { key: "instagram", label: "Instagram", placeholder: "@yourbrand" },
+  { key: "address", label: "Address" },
+];
+
+/** Logo, contacts and colours used automatically in designs. */
+function BrandKitForm() {
+  const [brand, setBrand] = useState<BrandKitView | null>(null);
+  const [logo, setLogo] = useState<PublicAsset | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+
+  useEffect(() => {
+    api.getBrand().then((r) => {
+      setBrand(r.brand);
+      setLogo(r.logo);
+    }, () => setMessage("Couldn't load the brand kit."));
+  }, []);
+
+  if (!brand) return null;
+  const set = (k: keyof BrandKitView, v: string) => setBrand({ ...brand, [k]: v });
+
+  const save = async (patch: Partial<BrandKitView> = brand) => {
+    setSaving(true);
+    setMessage(null);
+    try {
+      const r = await api.saveBrand(patch);
+      setBrand(r.brand);
+      setLogo(r.logo);
+      setMessage("Saved");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="mb-6">
+      <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-faint">Brand kit</h3>
+      <form
+        className="space-y-3 rounded-xl border border-line bg-card p-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void save();
+        }}
+      >
+        <div className="flex items-center gap-3">
+          <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-xl border border-line bg-bg-2">
+            {logo?.thumbnailUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={logo.url} alt="Logo" className="h-full w-full object-contain" />
+            ) : uploading ? (
+              <Loader2 size={18} className="animate-spin text-muted" />
+            ) : (
+              <ImagePlus size={18} className="text-faint" />
+            )}
+          </div>
+          <label className="cursor-pointer rounded-lg border border-line px-3 py-1.5 text-xs text-muted hover:text-ink">
+            {logo ? "Change logo" : "Upload logo"}
+            <input
+              type="file"
+              accept=".png,.jpg,.jpeg,.webp,image/*"
+              className="hidden"
+              onChange={async (e) => {
+                const f = e.target.files?.[0];
+                e.target.value = "";
+                if (!f) return;
+                setUploading(true);
+                try {
+                  const asset = await uploadFile(f, null, () => undefined).promise;
+                  await save({ logoAssetId: asset.id });
+                } catch (err) {
+                  setMessage(err instanceof Error ? err.message : "Logo upload failed.");
+                } finally {
+                  setUploading(false);
+                }
+              }}
+            />
+          </label>
+          {logo && (
+            <button type="button" onClick={() => void save({ logoAssetId: null })} className="text-xs text-faint hover:text-danger">
+              Remove
+            </button>
+          )}
+        </div>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {BRAND_FIELDS.map((f) => (
+            <label key={f.key} className="text-xs text-faint">
+              {f.label}
+              <input
+                type={f.type ?? "text"}
+                value={(brand[f.key] as string) ?? ""}
+                placeholder={f.placeholder}
+                onChange={(e) => set(f.key, e.target.value)}
+                className="mt-1 w-full rounded-lg border border-line bg-bg-2 px-2.5 py-1.5 text-sm text-ink focus:border-accent/50 focus:outline-none"
+              />
+            </label>
+          ))}
+          {(["primaryColor", "secondaryColor"] as const).map((k) => (
+            <label key={k} className="text-xs text-faint">
+              {k === "primaryColor" ? "Primary colour" : "Secondary colour"}
+              <span className="mt-1 flex items-center gap-2">
+                <input
+                  type="color"
+                  value={brand[k] || "#21f36a"}
+                  onChange={(e) => set(k, e.target.value)}
+                  className="h-8 w-10 cursor-pointer rounded border border-line bg-transparent"
+                  aria-label={k === "primaryColor" ? "Primary colour" : "Secondary colour"}
+                />
+                <span className="text-sm text-muted">{brand[k] || "not set"}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+        <label className="block text-xs text-faint">
+          Notes for the assistant (audience, city, tone, languages)
+          <textarea
+            value={brand.notes}
+            onChange={(e) => set("notes", e.target.value)}
+            rows={2}
+            className="mt-1 w-full resize-none rounded-lg border border-line bg-bg-2 px-2.5 py-1.5 text-sm text-ink focus:border-accent/50 focus:outline-none"
+          />
+        </label>
+        <div className="flex items-center gap-3">
+          <button type="submit" disabled={saving} className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-bg hover:bg-accent-2 disabled:opacity-50">
+            {saving ? "Saving…" : "Save brand kit"}
+          </button>
+          {message && <span className="text-xs text-muted">{message}</span>}
+        </div>
+      </form>
+    </section>
   );
 }

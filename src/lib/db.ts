@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS assets (
   id TEXT PRIMARY KEY,
   conversation_id TEXT,
   kind TEXT NOT NULL CHECK (kind IN ('upload','output')),
-  media_type TEXT NOT NULL CHECK (media_type IN ('video','image')),
+  media_type TEXT NOT NULL CHECK (media_type IN ('video','image','audio')),
   original_name TEXT NOT NULL,
   storage_key TEXT NOT NULL,
   thumb_key TEXT,
@@ -105,7 +105,53 @@ CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS brand_kit (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  data TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL,
+  state TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_state ON agent_runs(state, created_at);
 `;
+
+/**
+ * Additive migrations for databases created by earlier versions. Each step
+ * is idempotent so it is safe to run on every start.
+ */
+function migrate(db: Database.Database) {
+  const cols = (table: string) => (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
+  if (!cols("messages").includes("updated_at")) {
+    db.exec("ALTER TABLE messages ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0; UPDATE messages SET updated_at = created_at;");
+  }
+  if (!cols("jobs").includes("kind")) {
+    db.exec("ALTER TABLE jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'edit'");
+  }
+  // v1 assets only allowed video/image; rebuild the table to allow audio.
+  const assetsSql = (db.prepare("SELECT sql FROM sqlite_master WHERE name = 'assets'").get() as { sql: string } | undefined)?.sql ?? "";
+  if (assetsSql && !assetsSql.includes("'audio'")) {
+    db.pragma("foreign_keys = OFF");
+    db.transaction(() => {
+      db.exec("ALTER TABLE assets RENAME TO assets_v1");
+      db.exec(SCHEMA.slice(SCHEMA.indexOf("CREATE TABLE IF NOT EXISTS assets"), SCHEMA.indexOf("CREATE INDEX IF NOT EXISTS idx_assets_conv")));
+      db.exec("INSERT INTO assets SELECT * FROM assets_v1; DROP TABLE assets_v1;");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_assets_conv ON assets(conversation_id)");
+    })();
+    db.pragma("foreign_keys = ON");
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_messages_updated ON messages(conversation_id, updated_at)");
+}
 
 type GlobalWithDb = typeof globalThis & { __januxDb?: Database.Database; __januxDbPath?: string };
 
@@ -119,6 +165,7 @@ export function getDb(): Database.Database {
   db.pragma("busy_timeout = 5000");
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA);
+  migrate(db);
   g.__januxDb = db;
   g.__januxDbPath = dbPath;
   return db;

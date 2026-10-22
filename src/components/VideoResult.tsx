@@ -12,6 +12,7 @@ interface Suggestion {
 /** Revision chips that send real instructions for edits the planner supports. */
 function suggestionsFor(v: PublicVersion): Suggestion[] {
   const s = v.spec;
+  if (!Array.isArray(s.clips)) return []; // motion graphics have no clip edit to revise
   const out: Suggestion[] = [];
   if (v.duration > 4) out.push({ label: "Make it shorter", message: "Make it shorter" });
   out.push(s.aspect === "9:16" ? { label: "Change to 16:9", message: "Change to 16:9" } : { label: "Change to 9:16", message: "Change to 9:16" });

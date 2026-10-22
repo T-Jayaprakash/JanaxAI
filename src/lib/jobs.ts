@@ -48,11 +48,25 @@ export interface JobError {
   diagnostic?: string;
 }
 
+export type JobKind = "edit" | "motion";
+
+/** An animated HTML composition rendered frame by frame to MP4. */
+export interface MotionSpec {
+  title: string;
+  format: "1:1" | "4:5" | "9:16" | "16:9";
+  duration: number;
+  fps: number;
+  html: string;
+}
+
 export interface Job {
   id: string;
+  kind: JobKind;
   conversationId: string;
   parentVersionId: string | null;
+  /** EditSpec for kind "edit", MotionSpec for kind "motion". */
   spec: EditSpec;
+  motion: MotionSpec | null;
   planInfo: PlanInfo;
   timeline: Timeline | null;
   state: JobState;
@@ -78,7 +92,19 @@ export const PIPELINE: { id: string; label: string; state: JobState }[] = [
   { id: "preview", label: "Preparing the preview", state: "finalizing" },
 ];
 
-export function initialStages(unsupported: string[]): Stage[] {
+export const MOTION_PIPELINE: { id: string; label: string; state: JobState }[] = [
+  { id: "prepare", label: "Preparing the animation", state: "validating" },
+  { id: "frames", label: "Rendering frames and encoding", state: "rendering" },
+  { id: "validate", label: "Checking the output file", state: "finalizing" },
+  { id: "preview", label: "Preparing the preview", state: "finalizing" },
+];
+
+export function pipelineFor(kind: JobKind) {
+  return kind === "motion" ? MOTION_PIPELINE : PIPELINE;
+}
+
+export function initialStages(unsupported: string[], kind: JobKind = "edit"): Stage[] {
+  if (kind === "motion") return MOTION_PIPELINE.map((p) => ({ id: p.id, label: p.label, status: "pending" }));
   const stages: Stage[] = PIPELINE.map((p) => ({ id: p.id, label: p.label, status: "pending" }));
   // Requested-but-unimplemented steps are listed honestly instead of faked.
   const extra: Stage[] = [];
@@ -96,11 +122,15 @@ export function initialStages(unsupported: string[]): Stage[] {
 type Row = Record<string, unknown>;
 
 function fromRow(r: Row): Job {
+  const kind = ((r.kind as string) ?? "edit") as JobKind;
+  const spec = parseJson(r.spec as string, {} as EditSpec);
   return {
     id: r.id as string,
+    kind,
+    motion: kind === "motion" ? (spec as unknown as MotionSpec) : null,
     conversationId: r.conversation_id as string,
     parentVersionId: (r.parent_version_id as string) ?? null,
-    spec: parseJson(r.spec as string, {} as EditSpec),
+    spec,
     planInfo: parseJson(r.plan_info as string, { planner: "", usesAI: false, changes: [], unsupported: [], notes: [] }),
     timeline: parseJson(r.timeline as string, null),
     state: r.state as JobState,
@@ -139,16 +169,24 @@ export function createJob(input: {
   planInfo: PlanInfo;
   timeline: Timeline;
 }): Job {
+  return insertJob("edit", input.conversationId, input.parentVersionId, input.spec, input.planInfo, input.timeline);
+}
+
+export function createMotionJob(input: { conversationId: string; motion: MotionSpec; planInfo: PlanInfo }): Job {
+  return insertJob("motion", input.conversationId, null, input.motion, input.planInfo, null);
+}
+
+function insertJob(kind: JobKind, conversationId: string, parentVersionId: string | null, spec: unknown, planInfo: PlanInfo, timeline: Timeline | null): Job {
   const t = now();
   const id = newId("job");
   getDb()
     .prepare(
-      `INSERT INTO jobs (id, conversation_id, parent_version_id, spec, plan_info, timeline, state, stages, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`,
+      `INSERT INTO jobs (id, kind, conversation_id, parent_version_id, spec, plan_info, timeline, state, stages, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`,
     )
     .run(
-      id, input.conversationId, input.parentVersionId, JSON.stringify(input.spec), JSON.stringify(input.planInfo),
-      JSON.stringify(input.timeline), JSON.stringify(initialStages(input.planInfo.unsupported)), t, t,
+      id, kind, conversationId, parentVersionId, JSON.stringify(spec), JSON.stringify(planInfo),
+      timeline ? JSON.stringify(timeline) : null, JSON.stringify(initialStages(planInfo.unsupported, kind)), t, t,
     );
   return getJob(id)!;
 }
@@ -220,7 +258,7 @@ export function retryJob(id: string): Job | null {
       `UPDATE jobs SET state = 'queued', stages = ?, error = NULL, cancel_requested = 0, attempts = 0,
        started_at = NULL, finished_at = NULL, heartbeat_at = NULL, updated_at = ? WHERE id = ?`,
     )
-    .run(JSON.stringify(initialStages(job.planInfo.unsupported)), now(), id);
+    .run(JSON.stringify(initialStages(job.planInfo.unsupported, job.kind)), now(), id);
   return getJob(id);
 }
 
@@ -239,7 +277,7 @@ export function recoverInterruptedJobs(): { requeued: number; failed: number } {
     } else if (job.attempts < maxJobAttempts) {
       getDb()
         .prepare("UPDATE jobs SET state = 'queued', stages = ?, updated_at = ? WHERE id = ?")
-        .run(JSON.stringify(initialStages(job.planInfo.unsupported)), now(), job.id);
+        .run(JSON.stringify(initialStages(job.planInfo.unsupported, job.kind)), now(), job.id);
       requeued++;
     } else {
       updateJob(job.id, {
@@ -266,6 +304,8 @@ export function isWorkerAlive(): boolean {
 export function toPublicJob(job: Job) {
   return {
     id: job.id,
+    kind: job.kind,
+    motion: job.motion ? { title: job.motion.title, format: job.motion.format, duration: job.motion.duration, fps: job.motion.fps } : null,
     conversationId: job.conversationId,
     parentVersionId: job.parentVersionId,
     spec: job.spec,

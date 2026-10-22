@@ -86,6 +86,8 @@ export function assembleArgs(opts: {
   output: string;
   spec: EditSpec;
   transition: Timeline["transition"];
+  /** Path of the background music file, when spec.music is set. */
+  musicPath?: string;
 }): { args: string[]; expectedDuration: number } {
   const { inputs, durations, spec } = opts;
   const n = inputs.length;
@@ -123,12 +125,24 @@ export function assembleArgs(opts: {
   }
   vPost.push("format=yuv420p");
   parts.push(`${vLabel}${vPost.join(",")}[vout]`);
-  parts.push(`${aLabel}${aPost.length ? aPost.join(",") : "anull"}[aout]`);
+  const music = spec.music && opts.musicPath ? spec.music : null;
+  if (music) {
+    // Loop the track to cover the video, fade it out, and mix it under the clip audio.
+    const fo = Math.min(1.5, total / 4);
+    parts.push(`${aLabel}${aPost.length ? aPost.join(",") : "anull"}[clipa]`);
+    parts.push(
+      `[${n}:a]aresample=48000,aformat=channel_layouts=stereo,atrim=0:${f(total)},asetpts=PTS-STARTPTS,volume=${f(music.volume)},afade=t=out:st=${f(Math.max(0, total - fo))}:d=${f(fo)}[music]`,
+    );
+    parts.push(`[clipa][music]amix=inputs=2:duration=first:normalize=0[aout]`);
+  } else {
+    parts.push(`${aLabel}${aPost.length ? aPost.join(",") : "anull"}[aout]`);
+  }
 
   return {
     expectedDuration: total,
     args: [
       ...inputs.flatMap((p) => ["-i", p]),
+      ...(music ? ["-stream_loop", "-1", "-i", opts.musicPath!] : []),
       "-filter_complex", parts.join(";"),
       "-map", "[vout]", "-map", "[aout]",
       ...ENCODE_VIDEO, "-crf", "21", "-profile:v", "high",

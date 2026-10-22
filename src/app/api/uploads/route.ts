@@ -23,6 +23,7 @@ export async function POST(req: Request) {
       mime: (req.headers.get("content-type") ?? "").split(";")[0].trim(),
       conversationId,
       declaredSize: declared,
+      purpose: url.searchParams.get("purpose") === "voice" ? "voice" : "media",
     });
     return Response.json({ asset: toPublicAsset(asset) }, { status: 201 });
   } catch (err) {

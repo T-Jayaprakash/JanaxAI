@@ -3,7 +3,7 @@ import type { EditSpec } from "../spec";
 export interface PlannerAsset {
   id: string;
   name: string;
-  mediaType: "video" | "image";
+  mediaType: "video" | "image" | "audio";
   duration: number | null;
 }
 

@@ -34,8 +34,9 @@ export function getConfig() {
 
 export const VIDEO_EXTENSIONS = ["mp4", "mov", "m4v", "webm", "mkv"] as const;
 export const IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "webp"] as const;
+export const AUDIO_EXTENSIONS = ["mp3", "m4a", "aac", "wav", "ogg"] as const;
 
-export const ALLOWED_MIME: Record<string, "video" | "image"> = {
+export const ALLOWED_MIME: Record<string, "video" | "image" | "audio"> = {
   "video/mp4": "video",
   "video/quicktime": "video",
   "video/x-m4v": "video",
@@ -44,4 +45,13 @@ export const ALLOWED_MIME: Record<string, "video" | "image"> = {
   "image/jpeg": "image",
   "image/png": "image",
   "image/webp": "image",
+  "audio/mpeg": "audio",
+  "audio/mp3": "audio",
+  "audio/mp4": "audio",
+  "audio/x-m4a": "audio",
+  "audio/aac": "audio",
+  "audio/wav": "audio",
+  "audio/x-wav": "audio",
+  "audio/wave": "audio",
+  "audio/ogg": "audio",
 };

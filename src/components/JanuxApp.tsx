@@ -1,17 +1,38 @@
 "use client";
 
-import { Clapperboard, Film, Menu, MessageSquarePlus, PanelLeftOpen, Sparkles, Subtitles, TriangleAlert, Upload, Wand2 } from "lucide-react";
+import {
+  AudioLines,
+  CalendarDays,
+  Check,
+  Clapperboard,
+  Film,
+  Images,
+  Loader2,
+  Menu,
+  MessageSquarePlus,
+  Music,
+  PanelLeftOpen,
+  Sparkles,
+  Square,
+  TriangleAlert,
+  Upload,
+  Wand2,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
   formatDuration,
+  type AppStatus,
+  type ReplyMeta,
   type ConversationSnapshot,
   type ConversationSummary,
   type Message,
   type PublicAsset,
   type PublicJob,
-  type PublicVersion,
 } from "@/lib/client/api";
+import { DesignGallery } from "./DesignGallery";
+import { Markdown } from "./Markdown";
 import { Composer, type ComposerHandle } from "./Composer";
 import { JobCard } from "./JobCard";
 import { LogoMark, Wordmark } from "./Logo";
@@ -21,9 +42,11 @@ import { VideoResult } from "./VideoResult";
 
 const SUGGESTIONS = [
   { icon: Film, label: "Edit my clips into a reel", text: "Combine these clips into a 15-second vertical reel with smooth transitions." },
-  { icon: Clapperboard, label: "Create a product advertisement", text: "Make a 30-second product ad from these clips with a cinematic look." },
-  { icon: Subtitles, label: "Add captions to my video", text: "Add captions to my video.", soon: true },
-  { icon: Wand2, label: "Make my video more cinematic", text: "Make my video more cinematic." },
+  { icon: Images, label: "Design a festival poster", text: "Design an Instagram poster for my business's festival offer." },
+  { icon: Sparkles, label: "Make an animated intro", text: "Make a 4-second animated intro with my business name for my reels." },
+  { icon: CalendarDays, label: "Plan my content for a week", text: "Plan my Instagram content for this week with captions, hashtags and the best times to post." },
+  { icon: Clapperboard, label: "Create a product ad", text: "Make a 30-second product ad from these clips with a cinematic look." },
+  { icon: Wand2, label: "Make my video cinematic", text: "Make my video more cinematic." },
 ];
 
 function setUrlConversation(id: string | null) {
@@ -42,6 +65,7 @@ export function JanuxApp() {
   const [panel, setPanel] = useState<null | "projects" | "account">(null);
   const [workerAlive, setWorkerAlive] = useState<boolean | null>(null);
   const [limits, setLimits] = useState({ maxUploadMB: 300, maxFiles: 10 });
+  const [status, setStatus] = useState<AppStatus | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [thinking, setThinking] = useState<{ text: string; attachments: PublicAsset[] } | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -65,6 +89,7 @@ export function JanuxApp() {
     api.status().then(
       (s) => {
         setLimits({ maxUploadMB: s.limits.maxUploadMB, maxFiles: s.limits.maxFilesPerMessage });
+        setStatus(s);
         setWorkerAlive(s.worker.alive);
       },
       () => undefined,
@@ -79,6 +104,14 @@ export function JanuxApp() {
     if (!currentId) return;
     const es = new EventSource(`/api/conversations/${currentId}/events`);
     let hadError = false;
+    es.addEventListener("message", (e) => {
+      const msg = JSON.parse((e as MessageEvent).data) as Message;
+      setSnapshot((s) => {
+        if (!s || s.conversation.id !== msg.conversationId) return s;
+        const exists = s.messages.some((x) => x.id === msg.id);
+        return { ...s, messages: exists ? s.messages.map((x) => (x.id === msg.id ? msg : x)) : [...s.messages, msg] };
+      });
+    });
     es.addEventListener("job", (e) => {
       const job = JSON.parse((e as MessageEvent).data) as PublicJob;
       setSnapshot((s) => {
@@ -200,15 +233,8 @@ export function JanuxApp() {
   const versions = snapshot?.versions ?? [];
   const versionById = new Map(versions.map((v) => [v.id, v]));
   const messages = snapshot?.messages ?? [];
-  const resultVersionOf = (m: Message): PublicVersion | null => {
-    if (m.role !== "assistant") return null;
-    if (m.jobId) {
-      const j = jobs.get(m.jobId);
-      return j?.state === "completed" && j.outputVersionId ? (versionById.get(j.outputVersionId) ?? null) : null;
-    }
-    return m.versionId ? (versionById.get(m.versionId) ?? null) : null;
-  };
-  const lastResultMessageId = [...messages].reverse().find((m) => resultVersionOf(m))?.id;
+  const lastVersionId = [...messages].reverse().find((m) => m.versionId)?.versionId ?? null;
+  const assistantEnabled = !!status?.assistant;
   const busyJob = (snapshot?.jobs ?? []).some((j) => !["completed", "failed", "cancelled"].includes(j.state));
   const isEmpty = !loading && messages.length === 0 && !thinking;
 
@@ -305,7 +331,7 @@ export function JanuxApp() {
               <div className="flex min-h-[55vh] flex-col items-center justify-center text-center animate-rise">
                 <LogoMark size={52} />
                 <h2 className="mt-5 text-2xl font-semibold tracking-tight sm:text-3xl">Hey! I&apos;m JANUXAI.</h2>
-                <p className="mt-2 text-base text-muted sm:text-lg">What video would you like to create today?</p>
+                <p className="mt-2 text-base text-muted sm:text-lg">What would you like to create today?</p>
                 <div className="mt-8 grid w-full max-w-xl grid-cols-1 gap-2 sm:grid-cols-2">
                   {SUGGESTIONS.map((s) => (
                     <button
@@ -315,49 +341,84 @@ export function JanuxApp() {
                     >
                       <s.icon size={17} className="shrink-0 text-accent" />
                       <span className="flex-1">{s.label}</span>
-                      {s.soon && <span className="rounded bg-line px-1.5 py-px text-[10px] uppercase tracking-wide text-muted">soon</span>}
                     </button>
                   ))}
                 </div>
                 <p className="mt-6 flex items-center gap-1.5 text-xs text-faint">
-                  <Upload size={13} /> Attach clips with the paperclip, or drop them anywhere here.
+                  <Upload size={13} /> Attach clips, photos or music, record a voice note in any language, or just ask.
                 </p>
               </div>
             )}
 
             <ol className="space-y-6">
               {messages.map((m) => {
-                const job = m.jobId ? jobs.get(m.jobId) : undefined;
-                const version = resultVersionOf(m);
+                const meta = (m.meta ?? {}) as ReplyMeta;
+                const legacyJob = m.jobId ? jobs.get(m.jobId) : undefined;
+                const replyJobs = [legacyJob, ...(meta.jobIds ?? []).map((id) => jobs.get(id))].filter((j): j is PublicJob => !!j);
+                const shownVersion = !m.jobId && !meta.jobIds?.length && m.versionId ? versionById.get(m.versionId) : undefined;
+                const streaming = meta.status === "pending" || meta.status === "streaming";
                 return (
                   <li key={m.id} className="animate-rise">
                     {m.role === "user" ? (
                       <UserMessage text={m.text} attachments={m.attachments.map((a) => snapshot!.assets[a]).filter(Boolean)} />
                     ) : (
-                      <AssistantMessage text={m.text}>
-                        {job && (
-                          <JobCard
-                            job={job}
-                            assets={snapshot!.assets}
-                            workerAlive={workerAlive}
-                            onCancel={async () => updateJob((await api.cancelJob(job.id)).job)}
-                            onRetry={async () => {
-                              try {
-                                updateJob((await api.retryJob(job.id)).job);
-                              } catch (err) {
-                                showToast(err instanceof Error ? err.message : "Retry failed.");
-                              }
-                            }}
-                          />
+                      <AssistantMessage text={m.text} streaming={streaming} pending={meta.status === "pending" || (streaming && !m.text)}>
+                        {meta.activity && meta.activity.length > 0 && <ActivityList items={meta.activity} />}
+                        {meta.status === "error" && meta.error && (
+                          <p role="alert" className="mt-3 rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-sm">
+                            {meta.error}
+                          </p>
                         )}
-                        {job?.state === "completed" && version && (
-                          <p className="mt-3 text-[15px] text-ink">Your video is ready! Version {version.number} is below.</p>
+                        {streaming && (
+                          <button
+                            onClick={() => void api.stopReply(m.id)}
+                            className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-line px-3 py-1 text-xs text-muted hover:text-ink"
+                          >
+                            <Square size={11} /> Stop
+                          </button>
                         )}
-                        {version && (
+                        {(meta.designs ?? []).map((d, i) => (
+                          <DesignGallery key={`${m.id}-d${i}`} design={d} assets={snapshot!.assets} />
+                        ))}
+                        {replyJobs.map((job) => {
+                          const version = job.state === "completed" && job.outputVersionId ? versionById.get(job.outputVersionId) : undefined;
+                          return (
+                            <div key={job.id}>
+                              <JobCard
+                                job={job}
+                                assets={snapshot!.assets}
+                                workerAlive={workerAlive}
+                                onCancel={async () => updateJob((await api.cancelJob(job.id)).job)}
+                                onRetry={async () => {
+                                  try {
+                                    updateJob((await api.retryJob(job.id)).job);
+                                  } catch (err) {
+                                    showToast(err instanceof Error ? err.message : "Retry failed.");
+                                  }
+                                }}
+                              />
+                              {version && (
+                                <>
+                                  <p className="mt-3 text-[15px] text-ink">
+                                    {job.kind === "motion" ? "Your animation is ready!" : "Your video is ready!"} Version {version.number} is below.
+                                  </p>
+                                  <VideoResult
+                                    version={version}
+                                    versions={versions}
+                                    showSuggestions={version.id === lastVersionId && !assistantEnabled}
+                                    onSend={(t) => void send(t, [])}
+                                    onRequestChanges={() => composerRef.current?.focus()}
+                                  />
+                                </>
+                              )}
+                            </div>
+                          );
+                        })}
+                        {shownVersion && (
                           <VideoResult
-                            version={version}
+                            version={shownVersion}
                             versions={versions}
-                            showSuggestions={m.id === lastResultMessageId}
+                            showSuggestions={shownVersion.id === lastVersionId && !assistantEnabled}
                             onSend={(t) => void send(t, [])}
                             onRequestChanges={() => composerRef.current?.focus()}
                           />
@@ -375,7 +436,7 @@ export function JanuxApp() {
                   <li className="animate-rise">
                     <AssistantMessage text="">
                       <p className="flex items-center gap-2 text-sm text-muted">
-                        <Sparkles size={14} className="animate-pulse text-accent" /> Planning your edit…
+                        <Sparkles size={14} className="animate-pulse text-accent" /> {assistantEnabled ? "Thinking…" : "Planning your edit…"}
                       </p>
                     </AssistantMessage>
                   </li>
@@ -391,11 +452,14 @@ export function JanuxApp() {
               ref={composerRef}
               maxUploadMB={limits.maxUploadMB}
               maxFiles={limits.maxFiles}
+              voiceNotes={!!status?.capabilities.voiceNotes}
               ensureConversation={ensureConversation}
               onSend={send}
             />
             <p className="mt-2 text-center text-[11px] text-faint">
-              JANUXAI edits with FFmpeg on this computer. Captions, music and voiceover are coming later.
+              {status?.assistant
+                ? `${status.assistant.devOnly ? "Dev mode · " : ""}Answers by ${status.assistant.label}. Videos and designs render on this computer.`
+                : "AI chat is off (no API key or local Claude Code). Video edits use the keyword planner."}
             </p>
           </div>
         </div>
@@ -431,17 +495,21 @@ export function JanuxApp() {
 }
 
 function UserMessage({ text, attachments }: { text: string; attachments: PublicAsset[] }) {
+  const voice = attachments.filter((a) => a.transcript !== undefined);
+  const media = attachments.filter((a) => a.transcript === undefined);
   return (
     <div className="flex flex-col items-end gap-2">
-      {attachments.length > 0 && (
+      {media.length > 0 && (
         <div className="flex max-w-[85%] flex-wrap justify-end gap-2">
-          {attachments.map((a) => (
+          {media.map((a) => (
             <figure key={a.id} className="w-32 overflow-hidden rounded-xl border border-line bg-card">
-              <div className="relative h-20 bg-black">
-                {a.thumbnailUrl && (
+              <div className="relative grid h-20 place-items-center bg-black">
+                {a.thumbnailUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={a.thumbnailUrl} alt="" className="h-full w-full object-cover" />
-                )}
+                ) : a.mediaType === "audio" ? (
+                  <Music size={22} className="text-accent" />
+                ) : null}
                 {a.duration != null && (
                   <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1 font-mono text-[10px]">{formatDuration(a.duration)}</span>
                 )}
@@ -453,21 +521,64 @@ function UserMessage({ text, attachments }: { text: string; attachments: PublicA
           ))}
         </div>
       )}
+      {voice.map((a) => (
+        <div key={a.id} className="max-w-[85%] rounded-2xl rounded-br-md border border-line bg-card-2 px-4 py-2.5">
+          <p className="mb-1 flex items-center gap-1.5 text-[11px] text-muted">
+            <AudioLines size={13} className="text-accent" /> Voice note{a.language ? ` · ${LANGUAGE_NAMES[a.language] ?? a.language}` : ""}
+            {a.duration ? ` · ${formatDuration(a.duration)}` : ""}
+          </p>
+          <audio controls preload="none" src={a.url} className="mb-1.5 h-8 w-full max-w-xs" />
+          <p className="text-[15px] leading-relaxed">“{a.transcript}”</p>
+        </div>
+      ))}
       {text && <p className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-card-2 px-4 py-2.5 text-[15px] leading-relaxed">{text}</p>}
     </div>
   );
 }
 
-function AssistantMessage({ text, children }: { text: string; children?: React.ReactNode }) {
+const LANGUAGE_NAMES: Record<string, string> = {
+  ta: "Tamil", ml: "Malayalam", te: "Telugu", kn: "Kannada", hi: "Hindi", en: "English", mr: "Marathi", bn: "Bengali", gu: "Gujarati", ur: "Urdu",
+};
+
+function AssistantMessage({ text, streaming, pending, children }: { text: string; streaming?: boolean; pending?: boolean; children?: React.ReactNode }) {
   return (
     <div className="flex gap-3">
       <div className="mt-0.5 shrink-0">
         <LogoMark size={26} />
       </div>
       <div className="min-w-0 flex-1">
-        {text && <p className="whitespace-pre-wrap text-[15px] leading-relaxed text-ink">{text}</p>}
+        {pending && !text ? (
+          <p className="flex items-center gap-2 text-sm text-muted">
+            <Sparkles size={14} className="animate-pulse text-accent" /> Thinking…
+          </p>
+        ) : (
+          text && (
+            <div className={streaming ? "typing-caret" : undefined}>
+              <Markdown text={text} />
+            </div>
+          )
+        )}
         {children}
       </div>
     </div>
+  );
+}
+
+function ActivityList({ items }: { items: { label: string; status: "running" | "done" | "failed" }[] }) {
+  return (
+    <ul className="mt-3 space-y-1.5" aria-label="What JANUXAI is doing">
+      {items.map((a, i) => (
+        <li key={i} className="flex items-center gap-2 text-sm">
+          {a.status === "running" ? (
+            <Loader2 size={14} className="animate-spin text-accent" />
+          ) : a.status === "done" ? (
+            <Check size={14} className="text-accent" />
+          ) : (
+            <X size={14} className="text-danger" />
+          )}
+          <span className={a.status === "failed" ? "text-danger" : "text-muted"}>{a.label}</span>
+        </li>
+      ))}
+    </ul>
   );
 }

@@ -81,6 +81,7 @@ export async function makeThumbnail(input: string, output: string, duration: num
       ...(at > 0 ? ["-ss", at.toFixed(2)] : []),
       "-i", input,
       "-frames:v", "1",
+      "-update", "1",
       "-vf", "scale='min(480,iw)':-2",
       "-q:v", "4",
       output,

@@ -21,7 +21,10 @@ export interface Message {
   attachments: string[];
   jobId: string | null;
   versionId: string | null;
+  /** Assistant reply state, activity, designs and job ids (see agent/context.ts). */
+  meta: Record<string, unknown>;
   createdAt: number;
+  updatedAt: number;
 }
 
 export interface Version {
@@ -55,7 +58,9 @@ const msgFromRow = (r: Row): Message => ({
   attachments: parseJson(r.attachments as string, []),
   jobId: (r.job_id as string) ?? null,
   versionId: (r.version_id as string) ?? null,
+  meta: parseJson(r.meta as string, {}),
   createdAt: r.created_at as number,
+  updatedAt: (r.updated_at as number) || (r.created_at as number),
 });
 
 const versionFromRow = (r: Row): Version => ({
@@ -134,19 +139,27 @@ export function deleteConversation(id: string): boolean {
   return true;
 }
 
-export function addMessage(input: Omit<Message, "id" | "createdAt">): Message {
-  const msg: Message = { ...input, id: newId("msg"), createdAt: now() };
+export function addMessage(input: Omit<Message, "id" | "createdAt" | "updatedAt" | "meta"> & { meta?: Record<string, unknown> }): Message {
+  const t = now();
+  const msg: Message = { ...input, meta: input.meta ?? {}, id: newId("msg"), createdAt: t, updatedAt: t };
   getDb()
     .prepare(
-      "INSERT INTO messages (id, conversation_id, role, text, attachments, job_id, version_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO messages (id, conversation_id, role, text, attachments, job_id, version_id, meta, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
-    .run(msg.id, msg.conversationId, msg.role, msg.text, JSON.stringify(msg.attachments), msg.jobId, msg.versionId, msg.createdAt);
+    .run(msg.id, msg.conversationId, msg.role, msg.text, JSON.stringify(msg.attachments), msg.jobId, msg.versionId, JSON.stringify(msg.meta), t, t);
   touchConversation(msg.conversationId);
   return msg;
 }
 
 export function setMessageVersion(jobId: string, versionId: string) {
-  getDb().prepare("UPDATE messages SET version_id = ? WHERE job_id = ?").run(versionId, jobId);
+  // Rule-planner messages link one job via job_id; AI messages list jobs in meta.
+  getDb()
+    .prepare("UPDATE messages SET version_id = ?, updated_at = ? WHERE job_id = ? OR (job_id IS NULL AND meta LIKE ?)")
+    .run(versionId, now(), jobId, `%"${jobId}"%`);
+}
+
+export function messagesUpdatedSince(conversationId: string, since: number): Message[] {
+  return (getDb().prepare("SELECT * FROM messages WHERE conversation_id = ? AND updated_at > ? ORDER BY updated_at").all(conversationId, since) as Row[]).map(msgFromRow);
 }
 
 export function listMessages(conversationId: string): Message[] {
@@ -183,10 +196,15 @@ export function insertVersion(v: Omit<Version, "id" | "number" | "createdAt">): 
  * produced or showed a version. Revisions start from it.
  */
 export function getBaseVersion(conversationId: string): Version | null {
-  const r = getDb()
-    .prepare("SELECT version_id FROM messages WHERE conversation_id = ? AND version_id IS NOT NULL ORDER BY created_at DESC, rowid DESC LIMIT 1")
-    .get(conversationId) as { version_id: string } | undefined;
-  return r ? getVersion(r.version_id) : null;
+  const rows = getDb()
+    .prepare("SELECT version_id FROM messages WHERE conversation_id = ? AND version_id IS NOT NULL ORDER BY created_at DESC, rowid DESC LIMIT 50")
+    .all(conversationId) as { version_id: string }[];
+  // Motion graphics are versions too, but only clip edits can be revised.
+  for (const r of rows) {
+    const v = getVersion(r.version_id);
+    if (v && Array.isArray(v.spec.clips)) return v;
+  }
+  return null;
 }
 
 export function toPublicVersion(v: Version, asset: Asset | null) {
@@ -222,7 +240,10 @@ export function getSnapshot(id: string): ConversationSnapshot | null {
   const jobs = listJobs(id);
   const versions = listVersions(id);
   const assetIds = new Set<string>();
-  for (const m of messages) m.attachments.forEach((a) => assetIds.add(a));
+  for (const m of messages) {
+    m.attachments.forEach((a) => assetIds.add(a));
+    for (const d of (m.meta.designs as { assetIds: string[] }[] | undefined) ?? []) d.assetIds.forEach((a) => assetIds.add(a));
+  }
   for (const j of jobs) j.spec.clips?.forEach((c) => assetIds.add(c.assetId));
   for (const v of versions) assetIds.add(v.assetId);
   const assets: Record<string, PublicAsset> = {};

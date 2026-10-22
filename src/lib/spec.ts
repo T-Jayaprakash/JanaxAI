@@ -33,6 +33,14 @@ export const EditSpecSchema = z.object({
     volume: z.number().min(0).max(3),
   }),
   fadeInOut: z.boolean(),
+  /** Background music track (an uploaded audio asset), mixed under the edit. */
+  music: z
+    .object({
+      assetId: z.string().regex(/^ast_[a-f0-9]{32}$/),
+      volume: z.number().min(0).max(2),
+    })
+    .nullable()
+    .default(null),
 });
 
 export type EditSpec = z.infer<typeof EditSpecSchema>;

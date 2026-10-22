@@ -1,15 +1,16 @@
 import fs from "node:fs";
-import { ALLOWED_MIME, getConfig, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS } from "./config";
+import { ALLOWED_MIME, AUDIO_EXTENSIONS, getConfig, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS } from "./config";
 import { getDb, newId, now, parseJson } from "./db";
-import { MediaError } from "./media/ffmpeg";
+import { ffmpeg, MediaError } from "./media/ffmpeg";
 import { makeThumbnail, probe, type ProbeResult } from "./media/probe";
+import { transcribe } from "./speech/transcribe";
 import { freeDiskBytes, getStorage } from "./storage";
 
 export interface Asset {
   id: string;
   conversationId: string | null;
   kind: "upload" | "output";
-  mediaType: "video" | "image";
+  mediaType: "video" | "image" | "audio";
   originalName: string;
   storageKey: string;
   thumbKey: string | null;
@@ -19,7 +20,7 @@ export interface Asset {
   width: number | null;
   height: number | null;
   hasAudio: boolean;
-  metadata: Partial<ProbeResult>;
+  metadata: Partial<ProbeResult> & { voiceNote?: boolean; transcript?: string; language?: string };
   createdAt: number;
 }
 
@@ -36,6 +37,9 @@ export interface PublicAsset {
   hasAudio: boolean;
   url: string;
   thumbnailUrl: string | null;
+  /** Set for voice notes: what was said and the detected language code. */
+  transcript?: string;
+  language?: string;
 }
 
 export class UploadError extends Error {
@@ -79,6 +83,7 @@ export function toPublicAsset(a: Asset): PublicAsset {
     hasAudio: a.hasAudio,
     url: `/api/assets/${a.id}/file`,
     thumbnailUrl: a.thumbKey ? `/api/assets/${a.id}/thumbnail` : null,
+    ...(a.metadata.voiceNote ? { transcript: a.metadata.transcript, language: a.metadata.language } : {}),
   };
 }
 
@@ -98,15 +103,17 @@ export function sanitizeDisplayName(name: string): string {
   return clean || "file";
 }
 
-export function classifyUpload(name: string, mime: string): { ext: string; mediaType: "video" | "image" } {
+export function classifyUpload(name: string, mime: string): { ext: string; mediaType: Asset["mediaType"] } {
   const ext = (name.split(".").pop() ?? "").toLowerCase();
   const isVideoExt = (VIDEO_EXTENSIONS as readonly string[]).includes(ext);
   const isImageExt = (IMAGE_EXTENSIONS as readonly string[]).includes(ext);
-  if (!isVideoExt && !isImageExt) {
-    throw new UploadError(415, `".${ext || "?"}" files aren't supported. Upload MP4, MOV, WebM, MKV, JPG, PNG or WebP.`);
+  const isAudioExt = (AUDIO_EXTENSIONS as readonly string[]).includes(ext);
+  if (!isVideoExt && !isImageExt && !isAudioExt) {
+    throw new UploadError(415, `".${ext || "?"}" files aren't supported. Upload MP4, MOV, WebM, MKV, JPG, PNG, WebP, MP3, M4A or WAV.`);
   }
-  const mediaType = isVideoExt ? "video" : "image";
-  const declared = ALLOWED_MIME[mime.toLowerCase()];
+  const declared = ALLOWED_MIME[mime.toLowerCase()] ?? (/^audio\/(webm|ogg)/i.test(mime) ? "audio" : undefined);
+  // Browser voice recordings arrive as audio/webm or audio/ogg.
+  const mediaType = declared === "audio" && (ext === "webm" || ext === "ogg") ? "audio" : isVideoExt ? "video" : isImageExt ? "image" : "audio";
   const generic = !mime || mime === "application/octet-stream";
   if (!generic && !declared) throw new UploadError(415, `File type "${mime}" isn't supported.`);
   if (declared && declared !== mediaType) throw new UploadError(415, "The file extension doesn't match its content type.");
@@ -119,6 +126,8 @@ export async function ingestUpload(input: {
   mime: string;
   conversationId: string | null;
   declaredSize?: number;
+  /** "voice" = a spoken instruction to transcribe, rather than a music track. */
+  purpose?: "voice" | "media";
 }): Promise<Asset> {
   const cfg = getConfig();
   const name = sanitizeDisplayName(input.originalName);
@@ -151,6 +160,7 @@ export async function ingestUpload(input: {
     if (size === 0) throw new UploadError(400, "The file is empty.");
 
     const info = await probe(filePath);
+    if (mediaType === "audio") return await finishAudio(info);
     if (!info.hasVideo) throw new UploadError(422, "No video or image content was found in this file.");
     if (mediaType === "video") {
       if (!info.duration || info.duration < 0.3) throw new UploadError(422, "This video is too short or has no readable duration.");
@@ -181,6 +191,26 @@ export async function ingestUpload(input: {
     };
     insertAsset(asset);
     return asset;
+
+    async function finishAudio(probed: typeof info): Promise<Asset> {
+      if (!probed.hasAudio || !probed.duration || probed.duration < 0.5) throw new UploadError(422, "No playable audio was found in this file.");
+      if (probed.duration > cfg.maxClipSeconds) throw new UploadError(422, "This audio file is too long.");
+      // Decode the first seconds to confirm the codec is supported.
+      await ffmpeg(["-t", "2", "-i", filePath, "-vn", "-f", "null", "-"], { timeoutMs: 30_000 });
+      let metadata: Asset["metadata"] = probed;
+      if (input.purpose === "voice") {
+        const t = await transcribe(filePath, storage.absolutePath(`tmp/${id}`)).finally(() => storage.remove(`tmp/${id}`));
+        if (!t.text) throw new UploadError(422, "I couldn't hear any words in that voice note. Please try again.");
+        metadata = { ...probed, voiceNote: true, transcript: t.text, language: t.language };
+      }
+      const asset: Asset = {
+        id, conversationId: input.conversationId, kind: "upload", mediaType: "audio", originalName: name, storageKey: key,
+        thumbKey: null, mime: input.mime || "application/octet-stream", size, duration: probed.duration, width: null, height: null,
+        hasAudio: true, metadata, createdAt: now(),
+      };
+      insertAsset(asset);
+      return asset;
+    }
   } catch (err) {
     out.destroy();
     storage.remove(key);

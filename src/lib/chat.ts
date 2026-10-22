@@ -12,6 +12,8 @@ import {
 import { createJob, toPublicJob, type PublicJob } from "./jobs";
 import { getPlanner } from "./planner";
 import { buildTimeline, type TimelineAsset } from "./timeline";
+import { queueAgentRun } from "./agent/run";
+import { selectBackend } from "./agent/provider";
 
 export class ChatError extends Error {
   constructor(public status: number, message: string) {
@@ -55,12 +57,26 @@ export async function handleUserMessage(conversationId: string, text: string, at
   const userMsg = addMessage({ conversationId, role: "user", text: trimmed, attachments: unique, jobId: null, versionId: null });
   if (conv.title === DEFAULT_TITLE && trimmed) renameConversation(conversationId, titleFrom(trimmed));
 
+  // With an AI engine available, the worker writes the reply (streamed).
+  const backend = selectBackend();
+  if (backend) {
+    const reply = addMessage({
+      conversationId, role: "assistant", text: "", attachments: [], jobId: null, versionId: null,
+      meta: { status: "pending", provider: backend.label },
+    });
+    queueAgentRun(conversationId, reply.id, backend.id);
+    return { messages: [userMsg, reply], job: null };
+  }
+
+  // Keyword planner: voice-note transcripts count as the user's words.
+  const voiceText = attachments.filter((a) => a.metadata.voiceNote).map((a) => a.metadata.transcript ?? "");
+  const media = attachments.filter((a) => !a.metadata.voiceNote);
   const base = getBaseVersion(conversationId);
   const versions = listVersions(conversationId);
   const planner = getPlanner();
   const plan = await planner.plan({
-    text: trimmed,
-    attachments: attachments.map((a) => ({ id: a.id, name: a.originalName, mediaType: a.mediaType, duration: a.duration })),
+    text: [trimmed, ...voiceText].filter(Boolean).join(" "),
+    attachments: media.map((a) => ({ id: a.id, name: a.originalName, mediaType: a.mediaType, duration: a.duration })),
     baseSpec: base?.spec ?? null,
     baseVersion: base ? { id: base.id, number: base.number } : null,
     baseDuration: base?.duration ?? null,
@@ -74,7 +90,7 @@ export async function handleUserMessage(conversationId: string, text: string, at
     return { messages: [userMsg, reply], job: null };
   }
 
-  const clipAssets = getAssets(plan.spec.clips.map((c) => c.assetId));
+  const clipAssets = getAssets(plan.spec.clips.map((c) => c.assetId)).filter((a) => a.mediaType !== "audio");
   if (clipAssets.length !== new Set(plan.spec.clips.map((c) => c.assetId)).size) {
     const reply = addMessage({
       conversationId, role: "assistant",
@@ -84,7 +100,7 @@ export async function handleUserMessage(conversationId: string, text: string, at
     return { messages: [userMsg, reply], job: null };
   }
   const assetMap = new Map<string, TimelineAsset>(
-    clipAssets.map((a) => [a.id, { id: a.id, name: a.originalName, mediaType: a.mediaType, duration: a.duration, width: a.width, height: a.height, hasAudio: a.hasAudio }]),
+    clipAssets.map((a) => [a.id, { id: a.id, name: a.originalName, mediaType: a.mediaType as "video" | "image", duration: a.duration, width: a.width, height: a.height, hasAudio: a.hasAudio }]),
   );
   const timeline = buildTimeline(plan.spec, assetMap, cfg);
   const job = createJob({

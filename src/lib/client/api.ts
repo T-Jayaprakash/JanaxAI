@@ -45,6 +45,7 @@ export interface ReplyMeta {
   activity?: { label: string; status: "running" | "done" | "failed" }[];
   designs?: { title: string; kind: string; format: string; assetIds: string[] }[];
   jobIds?: string[];
+  deliveries?: { versionId: string; title: string }[];
   error?: string;
 }
 

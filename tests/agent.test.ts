@@ -1,13 +1,18 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import { before, describe, it } from "node:test";
-import { executeAction } from "../src/lib/agent/actions";
+import { ingestUpload } from "../src/lib/assets";
 import { anthropicApiBackend, setStreamFactoryForTests } from "../src/lib/agent/backends/api";
-import { splitActions } from "../src/lib/agent/backends/cli";
 import { historyTurns, turnContext } from "../src/lib/agent/context";
 import { selectBackend } from "../src/lib/agent/provider";
 import { getBrandKit } from "../src/lib/brand";
-import { addMessage, createConversation } from "../src/lib/conversations";
-import { useTempDataDir } from "./helpers";
+import { addMessage, createConversation, getVersion } from "../src/lib/conversations";
+import { probe } from "../src/lib/media/probe";
+import { checkFfmpegArgs } from "../src/lib/studio/ffmpegGuard";
+import { runStudioTool, type StudioContext } from "../src/lib/studio/tools";
+import { inputName, resolveInWorkspace } from "../src/lib/studio/workspace";
+import { fileChunks, fixtures, useTempDataDir } from "./helpers";
 
 type FakeMessage = { content: unknown[]; stop_reason: string };
 
@@ -29,11 +34,108 @@ function fakeFactory(script: FakeMessage[], seen: unknown[]) {
   };
 }
 
+describe("ffmpeg guard", () => {
+  const ok = (args: string[]) => checkFfmpegArgs(args);
+  const bad = (args: string[]) => assert.throws(() => checkFfmpegArgs(args));
+
+  it("allows normal workspace edits and finds outputs", () => {
+    const plan = ok(["-i", "in/a.mp4", "-vf", "scale=1080:-2", "-c:v", "libx264", "work/out.mp4"]);
+    assert.deepEqual(plan.outputs, ["work/out.mp4"]);
+    assert.deepEqual(plan.inputs, ["in/a.mp4"]);
+    assert.ok(plan.args.includes("-protocol_whitelist"));
+    ok(["-f", "lavfi", "-i", "color=c=black:s=1080x1920:d=2", "work/bg.mp4"]);
+    ok(["-i", "work/a.mp4", "-metadata:s:v", "title=x", "work/b.mp4"]);
+  });
+
+  it("blocks network, outside paths, file-reading filters and overwriting inputs", () => {
+    bad(["-i", "https://evil.example/x.mp4", "work/o.mp4"]);
+    bad(["-i", "/etc/passwd", "work/o.mp4"]);
+    bad(["-i", "in/../../secret.mp4", "work/o.mp4"]);
+    bad(["-i", "in/a.mp4", "-vf", "movie=/etc/passwd", "work/o.mp4"]);
+    bad(["-i", "in/a.mp4", "in/a.mp4"]);
+    bad(["-i", "in/a.mp4", "/tmp/out.mp4"]);
+    bad(["-f", "concat", "-safe", "0", "-i", "work/list.txt", "work/o.mp4"]);
+    bad(["-i", "in/a.mp4", "-filter_complex_script", "work/f.txt", "work/o.mp4"]);
+  });
+});
+
+describe("studio tools", () => {
+  let ctx: StudioContext;
+  let clipRel: string;
+  before(async () => {
+    useTempDataDir();
+    const conversationId = createConversation().id;
+    const msg = addMessage({ conversationId, role: "assistant", text: "", attachments: [], jobId: null, versionId: null });
+    ctx = { conversationId, messageId: msg.id, runId: "run_test", shouldCancel: () => false };
+    const fx = fixtures();
+    const a = await ingestUpload({ body: fileChunks(fx.landscapeWithAudio), originalName: "clip.mp4", mime: "video/mp4", conversationId });
+    clipRel = inputName(a);
+  });
+
+  it("lists media and keeps paths inside the workspace", async () => {
+    const out = await runStudioTool("list_media", {}, ctx);
+    assert.match(out.text, /clip\.mp4/);
+    assert.throws(() => resolveInWorkspace(ctx.conversationId, "../../etc/passwd"));
+    assert.throws(() => resolveInWorkspace(ctx.conversationId, "in/x.mp4", { writable: true }));
+  });
+
+  it("inspects video as a contact sheet image", async () => {
+    const out = await runStudioTool("inspect_media", { path: clipRel, frames: 8 }, ctx);
+    assert.equal(out.isError, undefined, out.text);
+    assert.equal(out.images?.length, 1);
+    assert.ok(fs.existsSync(out.images![0]));
+  });
+
+  it("runs an edit, renders a transparent overlay, composites, and delivers", async () => {
+    const cut = await runStudioTool(
+      "run_ffmpeg",
+      { purpose: "Cut and reframe", args: ["-i", clipRel, "-t", "2", "-vf", "scale=-2:640,crop=360:640,fps=30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "work/cut.mp4"] },
+      ctx,
+    );
+    assert.ok(!cut.isError, cut.text);
+    const anim = await runStudioTool(
+      "render_animation",
+      {
+        html: `<div id=c style="position:absolute;bottom:80px;width:100%;text-align:center;font:800 40px sans-serif;color:#ff0"></div>
+          <script>const w=[["Hello",0],["🔥 World",1]];window.__januxSeek=t=>{document.getElementById('c').textContent=(w.filter(x=>x[1]<=t).pop()||[""])[0]}</script>`,
+        width: 360,
+        height: 640,
+        duration: 2,
+        fps: 15,
+        transparent: true,
+        output: "work/caps.mov",
+      },
+      ctx,
+    );
+    assert.ok(!anim.isError, anim.text);
+    const comp = await runStudioTool(
+      "run_ffmpeg",
+      { purpose: "Add captions", args: ["-i", "work/cut.mp4", "-i", "work/caps.mov", "-filter_complex", "[0:v][1:v]overlay=0:0:format=auto[v]", "-map", "[v]", "-map", "0:a", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "copy", "work/final.mp4"] },
+      ctx,
+    );
+    assert.ok(!comp.isError, comp.text);
+    const del = await runStudioTool("deliver", { path: "work/final.mp4", title: "Test reel" }, ctx);
+    assert.ok(!del.isError, del.text);
+    const info = await probe(path.join(path.dirname(resolveInWorkspace(ctx.conversationId, "work/x")), "final.mp4"));
+    assert.equal(info.width, 360);
+    assert.match(del.text, /version 1/);
+  });
+
+  it("rejects bad input without running anything", async () => {
+    const out = await runStudioTool("run_ffmpeg", { purpose: "x", args: ["-i", "/etc/hosts", "work/o.mp4"] }, ctx);
+    assert.equal(out.isError, true);
+    const unknown = await runStudioTool("rm_rf", {}, ctx);
+    assert.equal(unknown.isError, true);
+  });
+});
+
 describe("agent", () => {
   let conversationId: string;
+  let messageId: string;
   before(() => {
     useTempDataDir();
     conversationId = createConversation().id;
+    messageId = addMessage({ conversationId, role: "assistant", text: "", attachments: [], jobId: null, versionId: null }).id;
   });
 
   it("is off in rules mode and refuses the CLI engine in production", () => {
@@ -46,15 +148,6 @@ describe("agent", () => {
     (process.env as Record<string, string | undefined>).NODE_ENV = env.NODE_ENV;
   });
 
-  it("validates action input before running anything", async () => {
-    const bad = await executeAction("create_design", { kind: "poster", format: "2:3", title: "x", slides: [] }, { conversationId, planner: { label: "t", usesAI: true } });
-    assert.equal(bad.ok, false);
-    const unknown = await executeAction("rm_rf", {}, { conversationId, planner: { label: "t", usesAI: true } });
-    assert.equal(unknown.ok, false);
-    const noClips = await executeAction("edit_video", { aspect: "9:16" }, { conversationId, planner: { label: "t", usesAI: true } });
-    assert.equal(noClips.ok, false, "edit without clips or a base version is rejected");
-  });
-
   it("runs a tool-use loop on the API engine and streams the final text", async () => {
     const seen: unknown[] = [];
     setStreamFactoryForTests(
@@ -63,55 +156,42 @@ describe("agent", () => {
           {
             stop_reason: "tool_use",
             content: [
-              { type: "text", text: "Saving your details." },
-              { type: "tool_use", id: "toolu_1", name: "update_brand_kit", input: { businessName: "Trichy Sweets", phone: "98765 43210" } },
+              { type: "text", text: "Saving your channel name." },
+              { type: "tool_use", id: "toolu_1", name: "update_brand_kit", input: { businessName: "Trichy Vlogs" } },
             ],
           },
-          { stop_reason: "end_turn", content: [{ type: "text", text: "Done! Want a poster next?" }] },
+          { stop_reason: "end_turn", content: [{ type: "text", text: "Done! Send me your raw footage." }] },
         ],
         seen,
       ),
     );
     let text = "";
-    const activity: string[] = [];
     await anthropicApiBackend.run(
-      { system: "sys", history: [{ role: "assistant", text: "earlier reply" }], context: "<context/>", userText: "My bakery is Trichy Sweets" },
+      { system: "sys", history: [{ role: "assistant", text: "earlier" }], context: "<context/>", userText: "hi", conversationId, messageId, runId: "run_x" },
       {
         onText: (d) => (text += d),
-        onActivity: (label, status) => activity.push(`${status}:${label}`),
-        runAction: (name, input) => executeAction(name, input, { conversationId, planner: { label: "t", usesAI: true } }),
+        runTool: (name, input) => runStudioTool(name, input, { conversationId, messageId, runId: "run_x", shouldCancel: () => false }),
         shouldCancel: () => false,
       },
     );
     setStreamFactoryForTests(null);
-    assert.equal(getBrandKit().businessName, "Trichy Sweets");
-    assert.match(text, /Saving your details\.[\s\S]*Done! Want a poster next\?/);
-    assert.deepEqual(activity, ["running:Saving your brand details", "done:Saving your brand details"]);
+    assert.equal(getBrandKit().businessName, "Trichy Vlogs");
+    assert.match(text, /Saving your channel name\.\n\nDone!/);
     const first = seen[0] as { messages: { role: string }[]; fallbacks: string; betas: string[]; tools: { name: string; eager_input_streaming?: boolean }[] };
     assert.equal(first.messages[0].role, "user", "history never starts with an assistant turn");
     assert.equal(first.fallbacks, "default");
     assert.ok(first.betas.includes("server-side-fallback-2026-07-01"));
-    assert.ok(first.tools.every((t) => t.eager_input_streaming));
+    assert.ok(first.tools.some((t) => t.name === "run_ffmpeg") && first.tools.every((t) => t.eager_input_streaming));
     const second = seen[1] as { messages: { role: string; content: { type: string; is_error?: boolean }[] }[] };
-    const result = second.messages.at(-1)!.content[0];
-    assert.equal(result.type, "tool_result");
-    assert.equal(result.is_error, false);
+    assert.equal(second.messages.at(-1)!.content[0].type, "tool_result");
   });
 
-  it("separates the hidden CLI action block from visible text", () => {
-    const { visible, actionsJson } = splitActions('Making it now!\n\n```janux-actions\n[{"action":"update_brand_kit","input":{"tagline":"Fresh"}}]\n```');
-    assert.equal(visible, "Making it now!");
-    assert.deepEqual(JSON.parse(actionsJson!), [{ action: "update_brand_kit", input: { tagline: "Fresh" } }]);
-    assert.deepEqual(splitActions("Just text"), { visible: "Just text", actionsJson: null });
-  });
-
-  it("builds context with brand kit, assets and voice transcripts", () => {
-    const user = addMessage({ conversationId, role: "user", text: "hello", attachments: [], jobId: null, versionId: null });
-    const ctx = turnContext(conversationId);
-    assert.match(ctx, /Trichy Sweets/);
-    assert.match(ctx, /IST/);
-    const turns = historyTurns(conversationId, "none");
-    assert.equal(turns.at(-1)!.text, "hello");
-    assert.ok(user.id);
+  it("builds context with brand kit and workspace paths", () => {
+    addMessage({ conversationId, role: "user", text: "hello", attachments: [], jobId: null, versionId: null });
+    const ctxText = turnContext(conversationId);
+    assert.match(ctxText, /Trichy Vlogs/);
+    assert.match(ctxText, /IST/);
+    assert.equal(historyTurns(conversationId, "none").at(-1)!.text, "hello");
+    assert.equal(getVersion("ver_missing"), null);
   });
 });

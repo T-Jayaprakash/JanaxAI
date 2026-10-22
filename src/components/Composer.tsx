@@ -379,7 +379,7 @@ export function Composer({
                 void addFiles(e.clipboardData.files);
               }
             }}
-            placeholder={items.length ? "Add instructions…" : "Ask anything, or describe your video…"}
+            placeholder={items.length ? "How should I edit this?" : "Describe the video you want…"}
             className="max-h-[200px] min-h-10 flex-1 resize-none bg-transparent px-1 py-2.5 text-[15px] leading-6 text-ink placeholder:text-faint focus:outline-none focus-visible:outline-none"
           />
           {recordSupported && voiceNotes && (

@@ -1,6 +1,6 @@
 # AI engines
 
-JANUXAI's assistant is Claude. It answers questions, plans content, edits videos, designs posters and carousels, and makes motion graphics. The worker process picks one of three engines when it starts, using `JANUX_AI`:
+JANUXAI's video editor is Claude. It edits raw footage, adds captions, effects and music, matches reference styles, and makes motion graphics. The worker process picks one of three engines when it starts, using `JANUX_AI`:
 
 | `JANUX_AI` | Engine | Use for |
 | --- | --- | --- |
@@ -32,18 +32,37 @@ Rules for this engine:
 
 The API engine streams replies. It sends the four actions below as tools with `eager_input_streaming` and validates every input with zod before running it. Rendered design thumbnails go back to Claude in the tool result, so it can check its own work. It stops on `refusal` and `max_tokens`, and it opts into `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`), so a request the safety classifiers decline is retried on Anthropic's recommended fallback model.
 
-## Actions
+## The studio toolkit
 
-Both engines can call the same four actions, defined in `src/lib/agent/actions.ts`:
+JANUXAI is a video studio. Claude edits the way a human editor would. It looks at the footage, listens to it, cuts it with FFmpeg, builds captions and motion graphics as HTML animations, checks frames of its own render, and delivers. Both engines use the same tools, defined in `src/lib/studio/tools.ts`. The API engine gets them as native tools. The local CLI engine gets them through an MCP server (`worker/mcp-studio.ts`) that Claude Code starts for each reply.
 
-| Action | What it does |
+| Tool | What it does |
 | --- | --- |
-| `edit_video` | Queues an FFmpeg render job, as a new edit or a revision of the current version. Only changed fields are sent. |
-| `create_design` | Renders 1–10 HTML/CSS slides to PNG in headless Chrome (posters, carousels, thumbnails, stories, flyers, banners). |
-| `create_motion_graphic` | Queues a job that seeks CSS animations frame by frame in Chrome and encodes them to MP4. The finished MP4 can be used as a clip in `edit_video`. |
-| `update_brand_kit` | Saves the business name, contacts, colours, logo and notes. |
+| `list_media` | Lists uploads and earlier outputs (`in/`) and files Claude made (`work/`) |
+| `inspect_media` | Returns a contact sheet of frames with timestamps; shows reference images |
+| `view_frames` | Returns up to 8 frames at chosen times. Claude uses it to pick shots and to check renders before delivering. |
+| `transcribe` | Word-level timestamps from Whisper, used for cutting pauses and retakes and for timing captions |
+| `analyze_audio` | Finds BPM, beat grid, accents, silences and loudness, used for beat-synced cuts |
+| `run_ffmpeg` | Runs any FFmpeg edit, inside a guard (see below) |
+| `render_animation` | Renders HTML/CSS/JS frame by frame, to a transparent ProRes 4444 `.mov` for overlays or an `.mp4`. Used for captions, titles, emojis, intros and motion graphics. |
+| `write_file` | Writes small text files: concat lists, data, LUTs |
+| `deliver` | Validates the video, converts it to H.264/AAC MP4, saves it as a version and shows it in chat |
+| `update_brand_kit` | Remembers the channel or business name, handles, contacts, colours and logo |
 
-Design pages get no network access except Google Fonts. Uploaded images are referenced as `janux-asset://<id>` and inlined as data URIs at render time.
+Each conversation has a workspace at `data/workspaces/<conversation>/`. `in/` holds read-only links to uploads and outputs. Claude writes to `work/`. Transcripts and analysis are cached in `cache/`. Because intermediate files persist, a reply that was stopped or interrupted can continue from where it left off.
+
+### Safety
+
+- **FFmpeg guard** (`src/lib/studio/ffmpegGuard.ts`):
+  - Arguments are always an array; no shell is used.
+  - Every argument is checked, including filter graphs.
+  - Network protocols and filters that read other files are blocked (`movie=`, `amovie=`, `sendcmd`, `zmq`, `ladspa`, `frei0r`, …).
+  - Absolute paths and `..` are rejected. Outputs must go to `work/` and can't overwrite an input.
+  - The concat demuxer must keep `-safe 1`.
+  - Each input gets `-protocol_whitelist file`.
+- **Originals are read-only.** Uploaded files are set to mode 0444.
+- **Animations can't reach the internet.** They run in headless Chrome with no network access except Google Fonts.
+- **Limits:** every tool has a timeout and respects Stop, and output is capped at 10 minutes.
 
 ## Voice notes
 

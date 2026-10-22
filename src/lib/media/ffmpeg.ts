@@ -24,6 +24,7 @@ interface RunOptions {
   onProgress?: (seconds: number) => void;
   /** Polled every 500ms; return true to kill the process. */
   shouldCancel?: () => boolean;
+  cwd?: string;
 }
 
 export interface RunResult {
@@ -39,7 +40,7 @@ export interface RunResult {
 export function runProcess(bin: string, args: string[], opts: RunOptions = {}): Promise<RunResult> {
   const timeoutMs = opts.timeoutMs ?? getConfig().ffmpegTimeoutMs;
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"], cwd: opts.cwd });
     let stdout = "";
     let stderr = "";
     let killedFor: "timeout" | "cancel" | null = null;

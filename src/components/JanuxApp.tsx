@@ -2,7 +2,6 @@
 
 import {
   AudioLines,
-  CalendarDays,
   Check,
   Clapperboard,
   Film,
@@ -41,12 +40,12 @@ import { Sidebar } from "./Sidebar";
 import { VideoResult } from "./VideoResult";
 
 const SUGGESTIONS = [
-  { icon: Film, label: "Edit my clips into a reel", text: "Combine these clips into a 15-second vertical reel with smooth transitions." },
-  { icon: Images, label: "Design a festival poster", text: "Design an Instagram poster for my business's festival offer." },
-  { icon: Sparkles, label: "Make an animated intro", text: "Make a 4-second animated intro with my business name for my reels." },
-  { icon: CalendarDays, label: "Plan my content for a week", text: "Plan my Instagram content for this week with captions, hashtags and the best times to post." },
-  { icon: Clapperboard, label: "Create a product ad", text: "Make a 30-second product ad from these clips with a cinematic look." },
-  { icon: Wand2, label: "Make my video cinematic", text: "Make my video more cinematic." },
+  { icon: Film, label: "Edit my raw footage into a reel", text: "Edit my raw footage into a vertical reel: cut the pauses and mistakes, and keep the best parts." },
+  { icon: Sparkles, label: "Add mass captions with emojis", text: "Add word-by-word animated captions with emojis to my video." },
+  { icon: Wand2, label: "Make an animated intro", text: "Make a 4-second animated intro with my channel name." },
+  { icon: Images, label: "Match a reference style", text: "Edit my clips in the same style as this reference." },
+  { icon: Clapperboard, label: "Create a product promo", text: "Make a 20-second product promo reel from my clips with music on the beat." },
+  { icon: Music, label: "Sync my clips to a song", text: "Cut my clips to the beat of this song." },
 ];
 
 function setUrlConversation(id: string | null) {
@@ -331,7 +330,7 @@ export function JanuxApp() {
               <div className="flex min-h-[55vh] flex-col items-center justify-center text-center animate-rise">
                 <LogoMark size={52} />
                 <h2 className="mt-5 text-2xl font-semibold tracking-tight sm:text-3xl">Hey! I&apos;m JANUXAI.</h2>
-                <p className="mt-2 text-base text-muted sm:text-lg">What would you like to create today?</p>
+                <p className="mt-2 text-base text-muted sm:text-lg">What video should we make today?</p>
                 <div className="mt-8 grid w-full max-w-xl grid-cols-1 gap-2 sm:grid-cols-2">
                   {SUGGESTIONS.map((s) => (
                     <button
@@ -345,7 +344,7 @@ export function JanuxApp() {
                   ))}
                 </div>
                 <p className="mt-6 flex items-center gap-1.5 text-xs text-faint">
-                  <Upload size={13} /> Attach clips, photos or music, record a voice note in any language, or just ask.
+                  <Upload size={13} /> Attach raw clips, a reference, or a song. Tell me in any language, or send a voice note.
                 </p>
               </div>
             )}
@@ -355,7 +354,9 @@ export function JanuxApp() {
                 const meta = (m.meta ?? {}) as ReplyMeta;
                 const legacyJob = m.jobId ? jobs.get(m.jobId) : undefined;
                 const replyJobs = [legacyJob, ...(meta.jobIds ?? []).map((id) => jobs.get(id))].filter((j): j is PublicJob => !!j);
-                const shownVersion = !m.jobId && !meta.jobIds?.length && m.versionId ? versionById.get(m.versionId) : undefined;
+                const delivered = (meta.deliveries ?? []).map((d) => versionById.get(d.versionId)).filter((v): v is NonNullable<typeof v> => !!v);
+                const shownVersion =
+                  !m.jobId && !meta.jobIds?.length && !meta.deliveries?.length && m.versionId ? versionById.get(m.versionId) : undefined;
                 const streaming = meta.status === "pending" || meta.status === "streaming";
                 return (
                   <li key={m.id} className="animate-rise">
@@ -414,6 +415,16 @@ export function JanuxApp() {
                             </div>
                           );
                         })}
+                        {delivered.map((v) => (
+                          <VideoResult
+                            key={v.id}
+                            version={v}
+                            versions={versions}
+                            showSuggestions={false}
+                            onSend={(t) => void send(t, [])}
+                            onRequestChanges={() => composerRef.current?.focus()}
+                          />
+                        ))}
                         {shownVersion && (
                           <VideoResult
                             version={shownVersion}
@@ -458,7 +469,7 @@ export function JanuxApp() {
             />
             <p className="mt-2 text-center text-[11px] text-faint">
               {status?.assistant
-                ? `${status.assistant.devOnly ? "Dev mode · " : ""}Answers by ${status.assistant.label}. Videos and designs render on this computer.`
+                ? `${status.assistant.devOnly ? "Dev mode · " : ""}Edits by ${status.assistant.label}. Videos render on this computer.`
                 : "AI chat is off (no API key or local Claude Code). Video edits use the keyword planner."}
             </p>
           </div>

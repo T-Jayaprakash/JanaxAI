@@ -65,7 +65,7 @@ function scheduleIdleClose() {
   g.__januxBrowserIdle.unref?.();
 }
 
-async function openPage(html: string, width: number, height: number): Promise<Page> {
+async function openPage(html: string, width: number, height: number, transparent = false): Promise<Page> {
   const browser = await getBrowser();
   const page = await browser.newPage();
   await page.setViewport({ width, height, deviceScaleFactor: 1 });
@@ -79,7 +79,7 @@ async function openPage(html: string, width: number, height: number): Promise<Pa
     req.abort("blockedbyclient");
   });
   page.setDefaultTimeout(20_000);
-  await page.setContent(wrapHtml(html, width, height), { waitUntil: "load", timeout: 20_000 }).catch(async () => {
+  await page.setContent(wrapHtml(html, width, height, transparent), { waitUntil: "load", timeout: 20_000 }).catch(async () => {
     // Fonts may be slow; render with whatever loaded.
   });
   await page.evaluate(() => document.fonts.ready);
@@ -87,8 +87,9 @@ async function openPage(html: string, width: number, height: number): Promise<Pa
 }
 
 /** Fixes the canvas size so designs can rely on exact pixel dimensions. */
-function wrapHtml(html: string, width: number, height: number): string {
-  const base = `<style>html,body{margin:0;padding:0;width:${width}px;height:${height}px;overflow:hidden;background:#000}*{box-sizing:border-box}</style>`;
+function wrapHtml(html: string, width: number, height: number, transparent = false): string {
+  const bg = transparent ? "transparent" : "#000";
+  const base = `<style>html,body{margin:0;padding:0;width:${width}px;height:${height}px;overflow:hidden;background:${bg}}*{box-sizing:border-box}</style>`;
   if (/<html[\s>]/i.test(html)) {
     return html.replace(/<head([^>]*)>/i, `<head$1>${base}`);
   }
@@ -131,21 +132,28 @@ export async function renderHtmlToVideo(opts: {
   duration: number;
   fps: number;
   outPath: string;
+  /** Transparent background: ProRes 4444 .mov with alpha, for overlays. */
+  transparent?: boolean;
   onProgress?: (fraction: number) => void;
   shouldCancel?: () => boolean;
 }): Promise<void> {
   const { width, height, fps, duration } = opts;
   const frames = Math.max(1, Math.round(duration * fps));
-  const page = await openPage(opts.html, width, height);
+  const page = await openPage(opts.html, width, height, opts.transparent);
+  const encode = opts.transparent
+    ? ["-map", "0:v", "-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le", "-vendor", "apl0"]
+    : [
+        "-f", "lavfi", "-t", String(duration), "-i", "anullsrc=r=48000:cl=stereo",
+        "-map", "0:v", "-map", "1:a",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "128k", "-shortest", "-movflags", "+faststart",
+      ];
   const ff = spawn(
     getConfig().ffmpegPath,
     [
       "-hide_banner", "-loglevel", "error", "-y",
       "-f", "image2pipe", "-framerate", String(fps), "-c:v", "png", "-i", "-",
-      "-f", "lavfi", "-t", String(duration), "-i", "anullsrc=r=48000:cl=stereo",
-      "-map", "0:v", "-map", "1:a",
-      "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
-      "-c:a", "aac", "-b:a", "128k", "-shortest", "-movflags", "+faststart",
+      ...encode,
       opts.outPath,
     ],
     { stdio: ["pipe", "ignore", "pipe"] },
@@ -159,7 +167,7 @@ export async function renderHtmlToVideo(opts: {
       if (opts.shouldCancel?.()) throw new CancelledError();
       if (Date.now() > deadline) throw new MediaError("The animation took too long to render.", "frame timeout", "timeout");
       await pauseAnimationsAt(page, (i / fps) * 1000);
-      const buf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width, height }, optimizeForSpeed: true });
+      const buf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width, height }, optimizeForSpeed: true, omitBackground: !!opts.transparent });
       if (!ff.stdin.write(buf)) await new Promise<void>((r) => ff.stdin.once("drain", () => r()));
       opts.onProgress?.((i + 1) / frames);
     }

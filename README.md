@@ -48,8 +48,8 @@ npm run build && npm start   # production mode, still local
 ## Things to try
 
 - "What are the best times to post reels for my Trichy bakery this week? Suggest 3 Tamil songs for a Diwali sweets reel."
-- "Enaku oru Instagram poster venum: Trichy Sweets, Diwali 20% off till Nov 5, phone 98765 43210."
-- "Make a 5-slide carousel: 5 reasons to choose our gym", then "Make the colours darker."
+- "Here's my raw vlog. Cut the boring parts and mistakes, add mass captions with emojis, and sync it to this song."
+- "Edit my clips in the same style as this reference" (attach a reference image or video).
 - "Make a 4-second animated intro with our name", then "Put that intro at the start of my reel."
 - Record a voice note in Tamil: "இந்த வீடியோவை செங்குத்தாக மாற்றி 15 வினாடிகளாக குறைக்கவும்."
 - Attach an MP3 you have the rights to and say "use this as background music, keep it soft."
@@ -67,16 +67,13 @@ npm run build && npm start   # production mode, still local
 
 ## What works today
 
-With an AI engine (Claude), you can ask for anything in your own words and language, and JANUXAI uses these actions:
+With an AI engine, JANUXAI works as a **video studio**: you ask for any video in your own words or language, and Claude edits it like a human editor would. It watches the footage as frames, listens to the speech with word timings, finds the beat of your song, and cuts with FFmpeg. It builds captions, emojis, titles and motion graphics as HTML animations, checks frames of its own render, and delivers an MP4. See [docs/AI_PROVIDERS.md](docs/AI_PROVIDERS.md#the-studio-toolkit).
 
-| Action | Output |
-| --- | --- |
-| Edit video | FFmpeg render: cuts, reframing, length, transitions, colour looks, audio, fades, background music |
-| Create design | PNG posters, carousels (2–10 slides), thumbnails, stories, flyers and banners, written as HTML/CSS and rendered in Chrome |
-| Motion graphic | MP4 intros, outros, titles and promo animations, from CSS animations rendered frame by frame |
-| Brand kit | Saves the logo, business name, contacts, colours and audience notes, which every design reuses |
+Verified live with the local Claude engine:
 
-Written answers (plans, captions, hashtags, scripts, posting schedules) come straight from Claude. It asks for missing details (offer, price, logo, contact) before designing.
+- **Raw creator footage to reel.** 26 seconds of raw talking with pauses, an "um" and a restarted take became a 14.2s 1080×1920 reel. Every mistake was cut, it has word-by-word gold captions with emojis, music is synced to the beat and ducked under the voice, and loudness is −14.1 LUFS.
+- **Tanglish revision.** "9 seconds-ku kurachidu, second clip venam, warm look, fade podu" applied all four changes.
+- **Motion graphics.** A 4-second animated brand intro, rendered frame by frame.
 
 Without an AI engine, the keyword planner still handles video edits. It understands these requests:
 

@@ -49,7 +49,7 @@ export function describeBrandKit(kit: BrandKit): string {
     ["Address", kit.address],
     ["Primary color", kit.primaryColor],
     ["Secondary color", kit.secondaryColor],
-    ["Logo", kit.logoAssetId ? `uploaded (use janux-asset://${kit.logoAssetId})` : ""],
+    ["Logo", kit.logoAssetId ? `uploaded (in/${kit.logoAssetId}${(getAsset(kit.logoAssetId)?.storageKey.match(/\.[a-z0-9]+$/) ?? [""])[0]} in the workspace)` : ""],
     ["Notes", kit.notes],
   ];
   const filled = rows.filter(([, v]) => v);

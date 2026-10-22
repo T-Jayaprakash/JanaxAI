@@ -4,6 +4,7 @@
  */
 import { claimNextAgentRun, processAgentRun, recoverInterruptedAgentRuns } from "../src/lib/agent/run";
 import { selectBackend } from "../src/lib/agent/provider";
+import { killActiveCliProcesses } from "../src/lib/agent/backends/cli";
 import { claimNextJob, recoverInterruptedJobs, setWorkerHeartbeat } from "../src/lib/jobs";
 import { processJob } from "../src/lib/render/pipeline";
 
@@ -53,7 +54,9 @@ async function agentLoop() {
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => {
     // An in-flight job is left "active"; the next worker start re-queues it.
+    // Assistant replies are stopped so they don't keep running unattended.
     stopping = true;
+    killActiveCliProcesses();
     process.exit(0);
   });
 }

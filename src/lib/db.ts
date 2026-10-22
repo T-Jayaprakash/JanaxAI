@@ -135,6 +135,9 @@ function migrate(db: Database.Database) {
   if (!cols("messages").includes("updated_at")) {
     db.exec("ALTER TABLE messages ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0; UPDATE messages SET updated_at = created_at;");
   }
+  if (!cols("agent_runs").includes("pid")) {
+    db.exec("ALTER TABLE agent_runs ADD COLUMN pid INTEGER");
+  }
   if (!cols("jobs").includes("kind")) {
     db.exec("ALTER TABLE jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'edit'");
   }

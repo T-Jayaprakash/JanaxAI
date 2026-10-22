@@ -1,17 +1,20 @@
-import type { ActionOutcome } from "../actions";
+import type { ToolOutput } from "../../studio/tools";
 
 export interface AgentTurnInput {
   system: string;
   history: { role: "user" | "assistant"; text: string }[];
   context: string;
   userText: string;
+  conversationId: string;
+  messageId: string;
+  runId: string;
 }
 
 export interface AgentCallbacks {
   /** Visible reply text as it streams. */
   onText: (delta: string) => void;
-  onActivity: (label: string, status: "running" | "done" | "failed") => void;
-  runAction: (name: string, input: unknown) => Promise<ActionOutcome>;
+  /** Runs a studio tool in this process (API engine). */
+  runTool: (name: string, input: unknown) => Promise<ToolOutput>;
   shouldCancel: () => boolean;
 }
 

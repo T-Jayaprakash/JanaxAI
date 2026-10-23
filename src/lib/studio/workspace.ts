@@ -3,6 +3,7 @@ import path from "node:path";
 import { getAsset, type Asset } from "../assets";
 import { getConfig } from "../config";
 import { getDb } from "../db";
+import { kitDir } from "../kit";
 import { getStorage } from "../storage";
 
 /**
@@ -30,9 +31,18 @@ export async function syncWorkspace(conversationId: string, extraAssetIds: strin
   const libTarget = path.join(/*turbopackIgnore: true*/ getConfig().dataDir, "library");
   if (fs.existsSync(libTarget) && !fs.existsSync(lib)) fs.symlinkSync(libTarget, lib);
   // kit/ = the user's own imported resources (My Kit), read-only.
+  // Only this conversation's workspace kit is linked, so projects never see another account's files.
+  const conv = await getDb().get<{ workspace_id: string }>("SELECT workspace_id FROM conversations WHERE id = ?", [conversationId]);
   const kit = path.join(/*turbopackIgnore: true*/ dir, "kit");
-  const kitTarget = getStorage().ensureDir("kit");
-  if (!fs.existsSync(kit)) fs.symlinkSync(kitTarget, kit);
+  const kitTarget = kitDir(conv?.workspace_id ?? "local");
+  let linked: string | null = null;
+  try {
+    linked = fs.readlinkSync(kit);
+  } catch {}
+  if (linked !== kitTarget) {
+    fs.rmSync(kit, { force: true });
+    fs.symlinkSync(kitTarget, kit);
+  }
   const ids = (await getDb().all<{ id: string }>("SELECT id FROM assets WHERE conversation_id = ? ORDER BY created_at", [conversationId])).map((r) => r.id);
   const storage = getStorage();
   const assets: Asset[] = [];

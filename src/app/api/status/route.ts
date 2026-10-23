@@ -1,3 +1,4 @@
+import { requireAccess } from "@/lib/auth/access";
 import { getConfig } from "@/lib/config";
 import { getDb } from "@/lib/db";
 import { dynamic } from "@/lib/http";
@@ -10,17 +11,21 @@ import { activeVoiceProvider, voiceProviders } from "@/lib/studio/voice";
 import { freeDiskBytes, storageBytesUsed } from "@/lib/storage";
 
 /** Real usage numbers for the Account panel — nothing here is estimated. */
-export async function GET() {
+export async function GET(req: Request) {
   await dynamic();
+  const access = await requireAccess(req);
+  if (access instanceof Response) return access;
   const cfg = getConfig();
   const usage = (await getDb().get<Record<string, number>>(
-    `SELECT COUNT(*) AS jobs, COALESCE(SUM(succeeded), 0) AS succeeded, COALESCE(SUM(render_ms), 0) AS render_ms,
-      COALESCE(SUM(input_bytes), 0) AS input_bytes, COALESCE(SUM(output_bytes), 0) AS output_bytes,
-      COALESCE(SUM(output_seconds), 0) AS output_seconds
-     FROM usage_records`,
+    `SELECT COUNT(*) AS jobs, COALESCE(SUM(u.succeeded), 0) AS succeeded, COALESCE(SUM(u.render_ms), 0) AS render_ms,
+      COALESCE(SUM(u.input_bytes), 0) AS input_bytes, COALESCE(SUM(u.output_bytes), 0) AS output_bytes,
+      COALESCE(SUM(u.output_seconds), 0) AS output_seconds
+     FROM usage_records u JOIN conversations c ON c.id = u.conversation_id WHERE c.workspace_id = ?`,
+    [access.workspaceId],
   ))!;
   const planner = getPlanner();
   return Response.json({
+    account: { email: access.email, name: access.name, workspaceId: access.workspaceId, workspaceName: access.workspaceName, role: access.role, signedIn: !!access.userId },
     worker: { alive: await isWorkerAlive() },
     planner: { label: planner.label, usesAI: planner.usesAI },
     assistant: (() => {
@@ -50,6 +55,7 @@ export async function GET() {
       inputBytes: usage.input_bytes,
       outputBytes: usage.output_bytes,
     },
-    storage: { usedBytes: storageBytesUsed(), freeBytes: await freeDiskBytes() },
+    // Disk numbers describe the server, so only the local single-user studio shows them.
+    storage: access.userId ? null : { usedBytes: storageBytesUsed(), freeBytes: await freeDiskBytes() },
   });
 }

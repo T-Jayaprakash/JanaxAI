@@ -15,7 +15,8 @@ export interface StorageDriver {
   ensureDir(prefix: string): string;
 }
 
-const KEY_PATTERN = /^(uploads|outputs|thumbs|tmp|kit)\/[A-Za-z0-9_.-]+$/;
+// kits/<workspace>/<file>: each workspace's My Kit files live apart.
+const KEY_PATTERN = /^((uploads|outputs|thumbs|tmp|kit)\/[A-Za-z0-9_.-]+|kits\/[A-Za-z0-9_-]{1,64}(\/[A-Za-z0-9_.-]+)?)$/;
 
 class LocalStorage implements StorageDriver {
   constructor(private root: string) {}

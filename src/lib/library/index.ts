@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getConfig } from "../config";
-import { kitFontFamily, kitUsage, listKit, type KitItem } from "../kit";
+import { kitFontFamily, kitKey, kitUsage, listKit, type KitItem } from "../kit";
 import { SFX_TYPES } from "../studio/audioGen";
 import { CAPTION_STYLES } from "./captions";
 import { EMOJIS, emojiFile } from "./emoji";
@@ -23,8 +23,8 @@ export function libraryInstalled(): boolean {
 let builtIn: LibraryEntry[] | null = null;
 
 /** The full searchable catalog: the user's kit first, then the built-in library. */
-export async function catalog(): Promise<LibraryEntry[]> {
-  return [...(await kitEntries()), ...builtInCatalog()];
+export async function catalog(workspaceId: string): Promise<LibraryEntry[]> {
+  return [...(await kitEntries(workspaceId)), ...builtInCatalog()];
 }
 
 /** The built-in library, built once from the asset modules. */
@@ -129,8 +129,8 @@ export function builtInCatalog(): LibraryEntry[] {
 const KIT_KIND: Record<KitItem["kind"], AssetKind> = { font: "font", lut: "look", logo: "logo", image: "image", overlay: "overlay", sfx: "sfx", music: "music", style: "style" };
 
 /** The user's imported resources, as catalog entries (always listed first). */
-export async function kitEntries(): Promise<LibraryEntry[]> {
-  return (await listKit()).map((i) => ({
+export async function kitEntries(workspaceId: string): Promise<LibraryEntry[]> {
+  return (await listKit(workspaceId)).map((i) => ({
     id: `kit:${i.id}`,
     kind: KIT_KIND[i.kind],
     name: i.kind === "font" ? kitFontFamily(i) : i.name,
@@ -143,9 +143,9 @@ export async function kitEntries(): Promise<LibraryEntry[]> {
 }
 
 /** Simple keyword search over names, tags and descriptions. */
-export async function searchLibrary(query: string, kind?: AssetKind, limit = 12): Promise<LibraryEntry[]> {
+export async function searchLibrary(query: string, workspaceId: string, kind?: AssetKind, limit = 12): Promise<LibraryEntry[]> {
   const terms = query.toLowerCase().split(/[\s,]+/).filter(Boolean);
-  const scored = (await catalog())
+  const scored = (await catalog(workspaceId))
     .filter((e) => !kind || e.kind === kind)
     .map((e) => {
       const hay = `${e.name} ${e.tags.join(" ")} ${e.description}`.toLowerCase();
@@ -165,14 +165,14 @@ export async function searchLibrary(query: string, kind?: AssetKind, limit = 12)
   return scored.slice(0, limit).map((x) => x.e);
 }
 
-export async function findEntry(id: string): Promise<LibraryEntry | undefined> {
-  return id.startsWith("kit:") ? (await kitEntries()).find((e) => e.id === id) : builtInCatalog().find((e) => e.id === id);
+export async function findEntry(id: string, workspaceId: string): Promise<LibraryEntry | undefined> {
+  return id.startsWith("kit:") ? (await kitEntries(workspaceId)).find((e) => e.id === id) : builtInCatalog().find((e) => e.id === id);
 }
 
 // ---- Rendering helpers -------------------------------------------------
 
 /** @font-face rules (data URIs) for every library family mentioned in the HTML. */
-export async function fontFaceCss(html: string): Promise<{ css: string; used: string[] }> {
+export async function fontFaceCss(html: string, workspaceId: string): Promise<{ css: string; used: string[] }> {
   const used: string[] = [];
   const rules: string[] = [];
   for (const f of FONTS) {
@@ -186,10 +186,10 @@ export async function fontFaceCss(html: string): Promise<{ css: string; used: st
     }
     if (any) used.push(`font:${fontId(f.family)}`);
   }
-  for (const k of await listKit("font")) {
+  for (const k of await listKit(workspaceId, "font")) {
     const family = kitFontFamily(k);
     if (!k.file || !html.includes(family)) continue;
-    const file = path.join(getConfig().dataDir, "kit", k.file);
+    const file = path.join(getConfig().dataDir, kitKey(k));
     if (!fs.existsSync(file)) continue;
     const fmt = String(k.meta.format ?? "truetype");
     const mime = fmt === "woff2" ? "font/woff2" : fmt === "woff" ? "font/woff" : fmt === "opentype" ? "font/otf" : "font/ttf";
@@ -237,11 +237,11 @@ el.style.opacity=t<el.__start?'0':'1';a.goToAndStop(Math.min(total-1,(local*fr)%
 }
 
 /** Licence credits for a list of used asset ids (deduplicated). */
-export async function creditsFor(ids: string[]): Promise<{ id: string; license: License }[]> {
+export async function creditsFor(ids: string[], workspaceId: string): Promise<{ id: string; license: License }[]> {
   const seen = new Set<string>();
   const out: { id: string; license: License }[] = [];
   for (const id of ids) {
-    const entry = await findEntry(id);
+    const entry = await findEntry(id, workspaceId);
     if (!entry?.license.attribution || seen.has(entry.license.attribution)) continue;
     seen.add(entry.license.attribution);
     out.push({ id, license: entry.license });

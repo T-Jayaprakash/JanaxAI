@@ -20,19 +20,19 @@ export const BrandKitSchema = z.object({
 });
 export type BrandKit = z.infer<typeof BrandKitSchema>;
 
-export async function getBrandKit(): Promise<BrandKit> {
-  const row = await getDb().get<{ data: string }>("SELECT data FROM brand_kit WHERE id = 1");
+export async function getBrandKit(workspaceId: string): Promise<BrandKit> {
+  const row = await getDb().get<{ data: string }>("SELECT data FROM brand_kits WHERE workspace_id = ?", [workspaceId]);
   const parsed = BrandKitSchema.safeParse(parseJson(row?.data, {}));
   const kit = parsed.success ? parsed.data : BrandKitSchema.parse({});
-  if (kit.logoAssetId && !(await getAsset(kit.logoAssetId))) kit.logoAssetId = null;
+  if (kit.logoAssetId && (await getAsset(kit.logoAssetId))?.workspaceId !== workspaceId) kit.logoAssetId = null;
   return kit;
 }
 
-export async function updateBrandKit(patch: Partial<BrandKit>): Promise<BrandKit> {
-  const next = BrandKitSchema.parse({ ...(await getBrandKit()), ...patch });
+export async function updateBrandKit(patch: Partial<BrandKit>, workspaceId: string): Promise<BrandKit> {
+  const next = BrandKitSchema.parse({ ...(await getBrandKit(workspaceId)), ...patch });
   await getDb().run(
-    "INSERT INTO brand_kit (id, data, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
-    [JSON.stringify(next), now()],
+    "INSERT INTO brand_kits (workspace_id, data, updated_at) VALUES (?, ?, ?) ON CONFLICT(workspace_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
+    [workspaceId, JSON.stringify(next), now()],
   );
   return next;
 }

@@ -32,13 +32,13 @@ function titleFrom(text: string): string {
  * or queue a render job. Rendering happens in the worker process, so this
  * returns quickly and the job keeps running if the browser closes.
  */
-export async function handleUserMessage(conversationId: string, text: string, attachmentIds: string[]): Promise<{
+export async function handleUserMessage(conversationId: string, text: string, attachmentIds: string[], workspaceId = "local"): Promise<{
   messages: Message[];
   job: PublicJob | null;
 }> {
   const cfg = getConfig();
   const conv = await getConversation(conversationId);
-  if (!conv) throw new ChatError(404, "Conversation not found.");
+  if (!conv || conv.workspaceId !== workspaceId) throw new ChatError(404, "Conversation not found.");
   const trimmed = text.trim().slice(0, 4000);
   if (!trimmed && attachmentIds.length === 0) throw new ChatError(400, "Write a message or attach a file.");
   if (attachmentIds.length > cfg.maxFilesPerMessage) {
@@ -48,7 +48,7 @@ export async function handleUserMessage(conversationId: string, text: string, at
   const attachments = await getAssets(unique);
   if (attachments.length !== unique.length) throw new ChatError(400, "One of the attachments no longer exists. Please upload it again.");
   for (const a of attachments) {
-    if (a.kind !== "upload" || (a.conversationId && a.conversationId !== conversationId)) {
+    if (a.kind !== "upload" || a.workspaceId !== workspaceId || (a.conversationId && a.conversationId !== conversationId)) {
       throw new ChatError(403, "That attachment belongs to a different conversation.");
     }
   }

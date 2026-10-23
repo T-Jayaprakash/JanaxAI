@@ -42,5 +42,6 @@ next-env.d.ts
 
 # JANUXAI local data (uploads, renders, database)
 /data/
+/data-*/
 /public/__test/
 !.env.example

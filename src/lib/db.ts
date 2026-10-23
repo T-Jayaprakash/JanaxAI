@@ -129,6 +129,13 @@ CREATE TABLE IF NOT EXISTS brand_kit (
   updated_at INTEGER NOT NULL
 );
 
+-- One brand kit per workspace (brand_kit above is the pre-accounts single kit).
+CREATE TABLE IF NOT EXISTS brand_kits (
+  workspace_id TEXT PRIMARY KEY,
+  data TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
 -- My Kit: fonts, LUTs, logos, overlays, sounds and saved styles the user imports.
 CREATE TABLE IF NOT EXISTS kit_items (
   id TEXT PRIMARY KEY,
@@ -161,8 +168,19 @@ const ADDED_COLUMNS: { table: string; column: string; type: string; backfill?: s
   { table: "messages", column: "updated_at", type: "INTEGER NOT NULL DEFAULT 0", backfill: "UPDATE messages SET updated_at = created_at" },
   { table: "agent_runs", column: "pid", type: "INTEGER" },
   { table: "jobs", column: "kind", type: "TEXT NOT NULL DEFAULT 'edit'" },
+  // Accounts: everything a customer owns belongs to a workspace ("local" = no-accounts dev mode).
+  { table: "conversations", column: "workspace_id", type: "TEXT NOT NULL DEFAULT 'local'" },
+  { table: "assets", column: "workspace_id", type: "TEXT NOT NULL DEFAULT 'local'" },
+  { table: "kit_items", column: "workspace_id", type: "TEXT NOT NULL DEFAULT 'local'" },
 ];
-const LATE_INDEXES = ["CREATE INDEX IF NOT EXISTS idx_messages_updated ON messages(conversation_id, updated_at)"];
+const LATE_INDEXES = [
+  "CREATE INDEX IF NOT EXISTS idx_messages_updated ON messages(conversation_id, updated_at)",
+  "CREATE INDEX IF NOT EXISTS idx_conversations_ws ON conversations(workspace_id, updated_at)",
+  "CREATE INDEX IF NOT EXISTS idx_assets_ws ON assets(workspace_id)",
+  "CREATE INDEX IF NOT EXISTS idx_kit_ws ON kit_items(workspace_id, created_at)",
+  // The single pre-accounts brand kit becomes the local workspace's kit.
+  "INSERT INTO brand_kits (workspace_id, data, updated_at) SELECT 'local', data, updated_at FROM brand_kit WHERE id = 1 AND NOT EXISTS (SELECT 1 FROM brand_kits WHERE workspace_id = 'local')",
+];
 
 // ---- SQLite -------------------------------------------------------------
 

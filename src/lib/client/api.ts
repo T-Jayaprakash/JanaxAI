@@ -15,13 +15,15 @@ export interface ConversationSummary {
 }
 
 export interface AppStatus {
+  account: { email: string | null; name: string | null; workspaceId: string; workspaceName: string; role: "owner" | "admin" | "member"; signedIn: boolean };
   worker: { alive: boolean };
   planner: { label: string; usesAI: boolean };
   assistant: { id: string; label: string; devOnly: boolean } | null;
   capabilities: { designs: boolean; voiceNotes: boolean; voiceover: { label: string; premium: boolean } | null };
   limits: { maxUploadMB: number; maxFilesPerMessage: number; maxClipSeconds: number; maxOutputSeconds: number };
   usage: { renders: number; succeeded: number; failed: number; renderSeconds: number; outputSeconds: number; inputBytes: number; outputBytes: number };
-  storage: { usedBytes: number; freeBytes: number };
+  /** Server disk numbers; only shown in the local single-user studio. */
+  storage: { usedBytes: number; freeBytes: number } | null;
 }
 
 export interface BrandKitView {
@@ -58,6 +60,12 @@ export class ApiError extends Error {
 async function call<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { ...init, headers: { "Content-Type": "application/json", ...init?.headers } });
   const body = await res.json().catch(() => ({}));
+  if (res.status === 401 && typeof window !== "undefined") {
+    // The session ended (signed out elsewhere or expired): sign in again and come back.
+    // A full page load drops all client state from the old session.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+    window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
+  }
   if (!res.ok) throw new ApiError(res.status, body.error ?? `Request failed (${res.status})`);
   return body as T;
 }

@@ -1,4 +1,5 @@
-import { getConversation, getSnapshot, messagesUpdatedSince } from "@/lib/conversations";
+import { requireAccess } from "@/lib/auth/access";
+import { getConversation, getConversationIn, getSnapshot, messagesUpdatedSince } from "@/lib/conversations";
 import { dynamic, jsonError } from "@/lib/http";
 import { isWorkerAlive, jobsUpdatedSince, toPublicJob } from "@/lib/jobs";
 
@@ -9,8 +10,10 @@ import { isWorkerAlive, jobsUpdatedSince, toPublicJob } from "@/lib/jobs";
  */
 export async function GET(req: Request, ctx: RouteContext<"/api/conversations/[id]/events">) {
   await dynamic();
+  const access = await requireAccess(req);
+  if (access instanceof Response) return access;
   const { id } = await ctx.params;
-  if (!await getConversation(id)) return jsonError(404, "Conversation not found.");
+  if (!(await getConversationIn(access.workspaceId, id))) return jsonError(404, "Conversation not found.");
   const encoder = new TextEncoder();
   let since = Number(new URL(req.url).searchParams.get("since")) || 0;
   let msgSince = Date.now();

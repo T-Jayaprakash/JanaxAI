@@ -1,6 +1,7 @@
 import { dynamic, jsonError } from "@/lib/http";
 import { streamFile } from "@/lib/http/files";
-import { getKitItem } from "@/lib/kit";
+import { requireAccess } from "@/lib/auth/access";
+import { getKitItem, kitKey } from "@/lib/kit";
 import { getStorage } from "@/lib/storage";
 
 const MIME: Record<string, string> = {
@@ -13,10 +14,12 @@ const MIME: Record<string, string> = {
 /** Serves a kit file by item id (the path comes from the database, never the request). */
 export async function GET(req: Request, ctx: RouteContext<"/api/kit/[id]/file">) {
   await dynamic();
+  const access = await requireAccess(req);
+  if (access instanceof Response) return access;
   const { id } = await ctx.params;
-  const item = /^kit_[a-f0-9]{32}$/.test(id) ? await getKitItem(id) : null;
+  const item = /^kit_[a-f0-9]{32}$/.test(id) ? await getKitItem(id, access.workspaceId) : null;
   const storage = getStorage();
-  if (!item?.file || !storage.exists(`kit/${item.file}`)) return jsonError(404, "File not found.");
+  if (!item?.file || !storage.exists(kitKey(item))) return jsonError(404, "File not found.");
   const ext = item.file.split(".").pop() ?? "";
-  return streamFile(req, storage.absolutePath(`kit/${item.file}`), { mime: MIME[ext] ?? "application/octet-stream" });
+  return streamFile(req, storage.absolutePath(kitKey(item)), { mime: MIME[ext] ?? "application/octet-stream" });
 }

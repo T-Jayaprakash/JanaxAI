@@ -185,7 +185,7 @@ describe("agent", () => {
       },
     );
     setStreamFactoryForTests(null);
-    assert.equal((await getBrandKit()).businessName, "Trichy Vlogs");
+    assert.equal((await getBrandKit("local")).businessName, "Trichy Vlogs");
     assert.match(text, /Saving your channel name\.\n\nDone!/);
     const first = seen[0] as { messages: { role: string }[]; fallbacks: string; betas: string[]; tools: { name: string; eager_input_streaming?: boolean }[] };
     assert.equal(first.messages[0].role, "user", "history never starts with an assistant turn");

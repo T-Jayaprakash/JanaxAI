@@ -1,3 +1,4 @@
+import { requireAccess } from "@/lib/auth/access";
 import { dynamic } from "@/lib/http";
 import { catalog, libraryInstalled, searchLibrary } from "@/lib/library";
 import { CAPTION_STYLES } from "@/lib/library/captions";
@@ -10,13 +11,15 @@ const KINDS: AssetKind[] = ["font", "caption_style", "transition", "sticker", "e
 /** Browsable library for the studio's Library panel. */
 export async function GET(req: Request) {
   await dynamic();
+  const access = await requireAccess(req);
+  if (access instanceof Response) return access;
   const url = new URL(req.url);
   const q = (url.searchParams.get("q") ?? "").slice(0, 100);
   const kindParam = url.searchParams.get("kind") as AssetKind | null;
   const kind = kindParam && KINDS.includes(kindParam) ? kindParam : undefined;
   // My Kit has its own tab (/api/kit); this lists the shared library only.
-  const shared = (await catalog()).filter((e) => e.source !== "kit");
-  const entries = q ? (await searchLibrary(q, kind, 160)).filter((e) => e.source !== "kit") : shared.filter((e) => !kind || e.kind === kind);
+  const shared = (await catalog(access.workspaceId)).filter((e) => e.source !== "kit");
+  const entries = q ? (await searchLibrary(q, access.workspaceId, kind, 160)).filter((e) => e.source !== "kit") : shared.filter((e) => !kind || e.kind === kind);
   const counts = Object.fromEntries(KINDS.map((k) => [k, shared.filter((e) => e.kind === k).length]));
   return Response.json({
     installed: libraryInstalled(),

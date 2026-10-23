@@ -1,6 +1,6 @@
 import { getAsset, getAssets, type Asset } from "../assets";
 import { describeBrandKit, getBrandKit } from "../brand";
-import { listMessages, listVersions, type Message } from "../conversations";
+import { conversationWorkspace, listMessages, listVersions, type Message } from "../conversations";
 import { getDb, parseJson } from "../db";
 import { kitFontFamily, kitUsage, listKit, type KitItem } from "../kit";
 import { LANGUAGE_NAMES } from "../speech/transcribe";
@@ -188,12 +188,13 @@ export async function turnContext(conversationId: string): Promise<string> {
   const nowText = new Intl.DateTimeFormat("en-IN", { dateStyle: "full", timeStyle: "short", timeZone: TZ }).format(new Date());
   const rows = await getDb().all<{ id: string }>("SELECT id FROM assets WHERE conversation_id = ? ORDER BY created_at", [conversationId]);
   const assets = await getAssets(rows.map((r) => r.id));
-  const kit = await getBrandKit();
+  const workspaceId = (await conversationWorkspace(conversationId)) ?? "local";
+  const kit = await getBrandKit(workspaceId);
   if (kit.logoAssetId && !assets.some((a) => a.id === kit.logoAssetId)) {
     const logo = await getAsset(kit.logoAssetId);
-    if (logo) assets.push(logo);
+    if (logo && logo.workspaceId === workspaceId) assets.push(logo);
   }
-  const [versions, kitItems] = await Promise.all([listVersions(conversationId), listKit()]);
+  const [versions, kitItems] = await Promise.all([listVersions(conversationId), listKit(workspaceId)]);
   return [
     `<context>`,
     `Current time: ${nowText} (IST)`,

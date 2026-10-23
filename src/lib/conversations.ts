@@ -8,6 +8,8 @@ export const DEFAULT_TITLE = "New video";
 
 export interface Conversation {
   id: string;
+  /** The workspace (account) that owns it; "local" in no-accounts dev mode. */
+  workspaceId: string;
   title: string;
   createdAt: number;
   updatedAt: number;
@@ -43,6 +45,7 @@ export interface Version {
 
 const convFromRow = (r: Row): Conversation => ({
   id: r.id as string,
+  workspaceId: (r.workspace_id as string) ?? "local",
   title: r.title as string,
   createdAt: r.created_at as number,
   updatedAt: r.updated_at as number,
@@ -75,11 +78,11 @@ const versionFromRow = (r: Row): Version => ({
   createdAt: r.created_at as number,
 });
 
-export async function createConversation(title = DEFAULT_TITLE): Promise<Conversation> {
+export async function createConversation(title = DEFAULT_TITLE, workspaceId = "local"): Promise<Conversation> {
   const t = now();
   const id = newId("cnv");
-  await getDb().run("INSERT INTO conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)", [id, title, t, t]);
-  return { id, title, createdAt: t, updatedAt: t };
+  await getDb().run("INSERT INTO conversations (id, workspace_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)", [id, workspaceId, title, t, t]);
+  return { id, workspaceId, title, createdAt: t, updatedAt: t };
 }
 
 export async function getConversation(id: string): Promise<Conversation | null> {
@@ -87,13 +90,25 @@ export async function getConversation(id: string): Promise<Conversation | null> 
   return r ? convFromRow(r) : null;
 }
 
-export async function listConversations() {
+/** The workspace that owns a conversation (null if it doesn't exist). */
+export async function conversationWorkspace(id: string): Promise<string | null> {
+  return (await getDb().get<{ workspace_id: string }>("SELECT workspace_id FROM conversations WHERE id = ?", [id]))?.workspace_id ?? null;
+}
+
+/** The conversation only if it belongs to `workspaceId` (same answer as "not found" otherwise). */
+export async function getConversationIn(workspaceId: string, id: string): Promise<Conversation | null> {
+  const c = await getConversation(id);
+  return c && c.workspaceId === workspaceId ? c : null;
+}
+
+export async function listConversations(workspaceId: string) {
   const rows = await getDb().all(
     `SELECT c.*,
       (SELECT COUNT(*) FROM versions v WHERE v.conversation_id = c.id) AS version_count,
       (SELECT v.asset_id FROM versions v WHERE v.conversation_id = c.id ORDER BY v.number DESC LIMIT 1) AS latest_asset,
       (SELECT j.state FROM jobs j WHERE j.conversation_id = c.id ORDER BY j.created_at DESC LIMIT 1) AS latest_job_state
-     FROM conversations c ORDER BY c.updated_at DESC`,
+     FROM conversations c WHERE c.workspace_id = ? ORDER BY c.updated_at DESC`,
+    [workspaceId],
   );
   return Promise.all(
     rows.map(async (r) => {

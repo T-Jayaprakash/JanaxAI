@@ -1,5 +1,6 @@
 import { ingestUpload, toPublicAsset, UploadError } from "@/lib/assets";
-import { getConversation } from "@/lib/conversations";
+import { requireAccess } from "@/lib/auth/access";
+import { getConversationIn } from "@/lib/conversations";
 import { jsonError, rateLimit } from "@/lib/http";
 
 /**
@@ -9,11 +10,13 @@ import { jsonError, rateLimit } from "@/lib/http";
 export async function POST(req: Request) {
   const limited = rateLimit(req, "uploads", 60);
   if (limited) return limited;
+  const access = await requireAccess(req);
+  if (access instanceof Response) return access;
   const url = new URL(req.url);
   const name = url.searchParams.get("name") ?? "";
   const conversationId = url.searchParams.get("conversationId");
   if (!name) return jsonError(400, "Missing file name.");
-  if (conversationId && !await getConversation(conversationId)) return jsonError(404, "Conversation not found.");
+  if (conversationId && !(await getConversationIn(access.workspaceId, conversationId))) return jsonError(404, "Conversation not found.");
   if (!req.body) return jsonError(400, "Empty upload.");
   const declared = Number(req.headers.get("content-length")) || undefined;
   try {
@@ -22,6 +25,7 @@ export async function POST(req: Request) {
       originalName: name,
       mime: (req.headers.get("content-type") ?? "").split(";")[0].trim(),
       conversationId,
+      workspaceId: access.workspaceId,
       declaredSize: declared,
       purpose: url.searchParams.get("purpose") === "voice" ? "voice" : "media",
     });

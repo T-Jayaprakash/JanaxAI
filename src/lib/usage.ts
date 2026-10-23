@@ -1,6 +1,5 @@
 import { getDb } from "./db";
 import { PLANS, type Plan } from "./plans";
-import { storageBytesUsed } from "./storage";
 
 /**
  * Usage meters for the studio, computed from what actually happened (assistant
@@ -60,16 +59,27 @@ export function monthStartIST(now: number): { start: number; next: number } {
   };
 }
 
-export async function usageReport(now = Date.now()): Promise<UsageReport> {
+export async function usageReport(workspaceId: string, now = Date.now()): Promise<UsageReport> {
   const plan = currentPlan();
   const db = getDb();
   const since = Math.min(weekStartIST(now), now - 2 * SESSION_MS);
   // A request counts once the assistant starts working on it; queued or stopped-before-start ones don't.
-  const times = (await db.all<{ created_at: number }>("SELECT created_at FROM agent_runs WHERE created_at >= ? AND attempts > 0", [since])).map((r) => Number(r.created_at));
+  const times = (
+    await db.all<{ created_at: number }>(
+      "SELECT r.created_at FROM agent_runs r JOIN conversations c ON c.id = r.conversation_id WHERE c.workspace_id = ? AND r.created_at >= ? AND r.attempts > 0",
+      [workspaceId, since],
+    )
+  ).map((r) => Number(r.created_at));
   const start = sessionStart(times, now);
   const week = weekStartIST(now);
   const month = monthStartIST(now);
-  const exports = Number((await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM versions WHERE created_at >= ?", [month.start]))?.n ?? 0);
+  const exports = Number(
+    (await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM versions v JOIN conversations c ON c.id = v.conversation_id WHERE c.workspace_id = ? AND v.created_at >= ?", [workspaceId, month.start]))?.n ?? 0,
+  );
+  // Stored bytes: the workspace's uploads and renders, plus its kit.
+  const stored =
+    Number((await db.get<{ n: number }>("SELECT COALESCE(SUM(size), 0) AS n FROM assets WHERE workspace_id = ?", [workspaceId]))?.n ?? 0) +
+    Number((await db.get<{ n: number }>("SELECT COALESCE(SUM(size), 0) AS n FROM kit_items WHERE workspace_id = ?", [workspaceId]))?.n ?? 0);
   return {
     plan: { id: plan.id, name: plan.name },
     enforced: false,
@@ -85,7 +95,7 @@ export async function usageReport(now = Date.now()): Promise<UsageReport> {
       },
       { id: "weekly", label: "Weekly", used: times.filter((t) => t >= week && t <= now).length, limit: plan.limits.weeklyRequests, unit: "requests", resetsAt: week + 7 * 24 * 60 * 60 * 1000 },
       { id: "exports", label: "Exports this month", used: exports, limit: plan.limits.monthlyExports, unit: "videos", resetsAt: month.next },
-      { id: "storage", label: "Storage", used: storageBytesUsed(), limit: plan.limits.storageGB * 1024 ** 3, unit: "bytes", resetsAt: null },
+      { id: "storage", label: "Storage", used: stored, limit: plan.limits.storageGB * 1024 ** 3, unit: "bytes", resetsAt: null },
     ],
   };
 }

@@ -43,7 +43,7 @@ describe("usage meters", () => {
       await insert(now - H, 1, "failed");
       await insert(now - 0.5 * H, 0, "cancelled"); // stopped before it started: not counted
       process.env.JANUX_PLAN = "basic";
-      const r = await usageReport(now);
+      const r = await usageReport("local", now);
       assert.equal(r.plan.name, "Basic");
       assert.equal(r.enforced, false);
       const session = r.meters.find((m) => m.id === "session")!;
@@ -52,8 +52,8 @@ describe("usage meters", () => {
       assert.equal(session.resetsAt, now - 2 * H + SESSION_MS);
       assert.equal(r.meters.find((m) => m.id === "exports")!.limit, 5);
       process.env.JANUX_PLAN = "pro";
-      assert.equal((await usageReport(now)).meters.find((m) => m.id === "weekly")!.limit, 400);
-      assert.equal((await usageReport(now)).meters.find((m) => m.id === "exports")!.limit, null);
+      assert.equal((await usageReport("local", now)).meters.find((m) => m.id === "weekly")!.limit, 400);
+      assert.equal((await usageReport("local", now)).meters.find((m) => m.id === "exports")!.limit, null);
       delete process.env.JANUX_PLAN;
     });
   });

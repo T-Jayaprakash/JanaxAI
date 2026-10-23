@@ -9,7 +9,7 @@ import { checkFfmpegArgs } from "../src/lib/studio/ffmpegGuard";
 
 describe("asset library", () => {
   it("has every phase-1 asset type with a commercial-use licence", async () => {
-    const all = await catalog();
+    const all = await catalog("local");
     const count = (k: string) => all.filter((e) => e.kind === k).length;
     assert.ok(count("font") >= 80, `fonts ${count("font")}`);
     assert.ok(count("transition") >= 70);
@@ -24,14 +24,14 @@ describe("asset library", () => {
   });
 
   it("searches by meaning words and kind", async () => {
-    assert.equal((await searchLibrary("tamil bold", "font"))[0].kind, "font");
-    assert.ok((await searchLibrary("tamil", "font")).every((e) => e.tags.includes("tamil")));
-    assert.ok((await searchLibrary("glitch")).some((e) => e.id === "transition:glitch"));
-    assert.ok((await searchLibrary("karaoke")).some((e) => e.id === "caption:karaoke-gold"));
+    assert.equal((await searchLibrary("tamil bold", "local", "font"))[0].kind, "font");
+    assert.ok((await searchLibrary("tamil", "local", "font")).every((e) => e.tags.includes("tamil")));
+    assert.ok((await searchLibrary("glitch", "local")).some((e) => e.id === "transition:glitch"));
+    assert.ok((await searchLibrary("karaoke", "local")).some((e) => e.id === "caption:karaoke-gold"));
   });
 
   it("only credits assets whose licence asks for attribution", async () => {
-    const credits = await creditsFor(["font:anek-tamil", "emoji:fire", "emoji:clap", "caption:tamil-mass"]);
+    const credits = await creditsFor(["font:anek-tamil", "emoji:fire", "emoji:clap", "caption:tamil-mass"], "local");
     assert.equal(credits.length, 1);
     assert.match(credits[0].license.attribution!, /Noto Emoji/);
   });

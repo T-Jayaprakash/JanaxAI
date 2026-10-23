@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { requireAccess } from "@/lib/auth/access";
 import { ChatError, handleUserMessage } from "@/lib/chat";
 import { jsonError, rateLimit } from "@/lib/http";
 
@@ -10,11 +11,13 @@ const Body = z.object({
 export async function POST(req: Request, ctx: RouteContext<"/api/conversations/[id]/messages">) {
   const limited = rateLimit(req, "messages", 30);
   if (limited) return limited;
+  const access = await requireAccess(req);
+  if (access instanceof Response) return access;
   const { id } = await ctx.params;
   const parsed = Body.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return jsonError(400, "Invalid message.");
   try {
-    const result = await handleUserMessage(id, parsed.data.text, parsed.data.attachmentIds);
+    const result = await handleUserMessage(id, parsed.data.text, parsed.data.attachmentIds, access.workspaceId);
     return Response.json(result, { status: 201 });
   } catch (err) {
     if (err instanceof ChatError) return jsonError(err.status, err.message);

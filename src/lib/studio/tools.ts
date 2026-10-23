@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { insertAsset, type Asset } from "../assets";
+import { getAsset, insertAsset, type Asset } from "../assets";
 import { BrandKitSchema, updateBrandKit } from "../brand";
 import { getConfig } from "../config";
-import { insertVersion, touchConversation } from "../conversations";
+import { conversationWorkspace, insertVersion, touchConversation } from "../conversations";
 import { getDb, newId, now } from "../db";
 import { renderHtmlToVideo } from "../graphics/render";
 import { ffmpeg, MediaError } from "../media/ffmpeg";
@@ -333,9 +333,14 @@ function usedInArgs(args: string[]): string[] {
  * library fonts it names, adds the animated-emoji runtime, and records which
  * library assets were used (for licence credits on delivery).
  */
+/** The workspace (account) a conversation belongs to: kits, brand and credits are per workspace. */
+async function workspaceOf(conversationId: string): Promise<string> {
+  return (await conversationWorkspace(conversationId)) ?? "local";
+}
+
 async function prepareComposition(conversationId: string, html: string): Promise<string> {
   const withImages = inlineWorkspaceImages(conversationId, html);
-  const fonts = await fontFaceCss(withImages);
+  const fonts = await fontFaceCss(withImages, await workspaceOf(conversationId));
   const emoji = emojiRuntime(withImages);
   recordUsedAssets(conversationId, [...fonts.used, ...emoji.used]);
   const head = `${fonts.css ? `<style>${fonts.css}</style>` : ""}`;
@@ -435,9 +440,9 @@ const searchLibraryTool = tool({
     limit: z.number().int().min(1).max(30).optional(),
   }),
   label: (i) => `Searching the library for “${i.query}”`,
-  async run(input) {
+  async run(input, ctx) {
     const installed = libraryInstalled();
-    const hits = (await searchLibrary(input.query, input.kind, input.limit ?? 12)).filter((h) => installed || h.source === "kit");
+    const hits = (await searchLibrary(input.query, await workspaceOf(ctx.conversationId), input.kind, input.limit ?? 12)).filter((h) => installed || h.source === "kit");
     const note = installed ? "" : "\n(The shared asset library isn't installed on this server yet: npm run setup:library. Only the user's kit is searchable.)";
     if (!hits.length) return { text: `Nothing matched. Try broader words, or a kind filter.${note}` };
     return { text: hits.map((h) => `- ${h.id} — ${h.name}${h.source === "kit" ? " [user's kit]" : ""}: ${h.description}\n  use: ${h.usage}`).join("\n") + note };
@@ -454,10 +459,10 @@ const getAssetTool = tool({
     delay: z.number().min(0).max(120).optional().describe("Seconds into the composition when it appears"),
   }),
   label: (i) => `Getting ${i.id.split(":")[1] ?? i.id} from the library`,
-  async run(input) {
+  async run(input, ctx) {
     const [kind, key] = input.id.split(":");
     if (kind === "kit") {
-      const item = await getKitItem(key);
+      const item = await getKitItem(key, await workspaceOf(ctx.conversationId));
       if (!item) return { text: "That kit item no longer exists.", isError: true };
       return { text: `${item.name} (user's ${item.kind})${item.file ? `\nfile: kit/${item.file}` : ""}${item.notes ? `\nnotes: ${item.notes}` : ""}\nuse: ${kitUsage(item)}${item.credit ? `\ncredit when used: ${item.credit}` : ""}` };
     }
@@ -479,7 +484,7 @@ const getAssetTool = tool({
       const c = CAPTION_STYLES.find((x) => x.id === key);
       return c ? { text: `Caption style ${c.id}: ${JSON.stringify(c)}` } : { text: "Unknown caption style.", isError: true };
     }
-    const entry = await findEntry(input.id);
+    const entry = await findEntry(input.id, await workspaceOf(ctx.conversationId));
     return entry ? { text: `${entry.name}: ${entry.description}\nuse: ${entry.usage}\nlicence: ${entry.license.name}` } : { text: "Unknown asset id.", isError: true };
   },
 });
@@ -649,7 +654,7 @@ const deliverTool = tool({
       height: final.height!,
     });
     await getDb().run("UPDATE messages SET version_id = ?, updated_at = ? WHERE id = ?", [version.id, now(), ctx.messageId]);
-    const credits = (await creditsFor(readUsedAssets(ctx.conversationId))).map((c) => c.license.attribution!);
+    const credits = (await creditsFor(readUsedAssets(ctx.conversationId), await workspaceOf(ctx.conversationId))).map((c) => c.license.attribution!);
     await patchMeta(ctx.messageId, (m) => ({ ...m, deliveries: [...(m.deliveries ?? []), { versionId: version.id, title: input.title, ...(credits.length ? { credits } : {}) }] }));
     await touchConversation(ctx.conversationId);
     // The delivered file is now an input for later revisions.
@@ -890,8 +895,8 @@ const saveStyleTool = tool({
     "Save an editing style to the user's kit so future edits can match it: the caption preset and colours, fonts, colour look, pace and cut rhythm, transitions, music/SFX approach, voice. Use when the user says things like 'save this as my style' or 'always edit like this'. Saving with an existing name updates it.",
   schema: StyleSchema,
   label: (i) => `Saving your style “${i.name}”`,
-  async run(input) {
-    const item = await saveStyle(input);
+  async run(input, ctx) {
+    const item = await saveStyle(input, await workspaceOf(ctx.conversationId));
     return { text: `Saved style "${item.name}" to the user's kit (kit:${item.id}).` };
   },
 });
@@ -901,8 +906,10 @@ const brandTool = tool({
   description: "Save brand details the user tells you (business/channel name, tagline, phone, WhatsApp, email, website, Instagram, address, colours, logo asset id, notes) for reuse in intros, end cards and captions.",
   schema: BrandKitSchema.partial(),
   label: () => "Saving your brand details",
-  async run(input) {
-    const kit = await updateBrandKit(input);
+  async run(input, ctx) {
+    const workspaceId = await workspaceOf(ctx.conversationId);
+    if (input.logoAssetId && (await getAsset(input.logoAssetId))?.workspaceId !== workspaceId) return { text: "That logo file isn't in this workspace.", isError: true };
+    const kit = await updateBrandKit(input, workspaceId);
     return { text: `Saved. Name: ${kit.businessName || "(not set)"}.` };
   },
 });

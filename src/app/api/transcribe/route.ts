@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { requireAccess } from "@/lib/auth/access";
 import { newId } from "@/lib/db";
 import { jsonError, rateLimit } from "@/lib/http";
 import { MediaError } from "@/lib/media/ffmpeg";
@@ -15,6 +16,8 @@ const MAX_BYTES = 25 * 1024 * 1024;
 export async function POST(req: Request) {
   const limited = rateLimit(req, "transcribe", 30);
   if (limited) return limited;
+  const access = await requireAccess(req);
+  if (access instanceof Response) return access;
   if (!isSpeechAvailable()) return jsonError(503, "Speech recognition isn't set up. Run: npm run setup:speech");
   if (!req.body) return jsonError(400, "No audio received.");
   const mime = (req.headers.get("content-type") ?? "").split(";")[0];

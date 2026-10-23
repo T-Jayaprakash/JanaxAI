@@ -8,6 +8,8 @@ import { freeDiskBytes, getStorage } from "./storage";
 
 export interface Asset {
   id: string;
+  /** Owning workspace. Always set when read; outputs inherit their conversation's on insert. */
+  workspaceId?: string;
   conversationId: string | null;
   kind: "upload" | "output";
   mediaType: "video" | "image" | "audio";
@@ -53,6 +55,7 @@ type Row = Record<string, unknown>;
 function fromRow(r: Row): Asset {
   return {
     id: r.id as string,
+    workspaceId: (r.workspace_id as string) ?? "local",
     conversationId: (r.conversation_id as string) ?? null,
     kind: r.kind as Asset["kind"],
     mediaType: r.media_type as Asset["mediaType"],
@@ -130,6 +133,8 @@ export async function ingestUpload(input: {
   originalName: string;
   mime: string;
   conversationId: string | null;
+  /** The uploader's workspace. */
+  workspaceId?: string;
   declaredSize?: number;
   /** "voice" = a spoken instruction to transcribe, rather than a music track. */
   purpose?: "voice" | "media";
@@ -182,6 +187,7 @@ export async function ingestUpload(input: {
 
     const asset: Asset = {
       id,
+      workspaceId: input.workspaceId ?? "local",
       conversationId: input.conversationId,
       kind: "upload",
       mediaType,
@@ -212,7 +218,7 @@ export async function ingestUpload(input: {
         metadata = { ...probed, voiceNote: true, transcript: t.text, language: t.language };
       }
       const asset: Asset = {
-        id, conversationId: input.conversationId, kind: "upload", mediaType: "audio", originalName: name, storageKey: key,
+        id, workspaceId: input.workspaceId ?? "local", conversationId: input.conversationId, kind: "upload", mediaType: "audio", originalName: name, storageKey: key,
         thumbKey: null, mime: input.mime || "application/octet-stream", size, duration: probed.duration, width: null, height: null,
         hasAudio: true, metadata, createdAt: now(),
       };
@@ -233,10 +239,10 @@ export async function ingestUpload(input: {
 
 export async function insertAsset(a: Asset) {
   await getDb().run(
-    `INSERT INTO assets (id, conversation_id, kind, media_type, original_name, storage_key, thumb_key, mime, size,
+    `INSERT INTO assets (id, workspace_id, conversation_id, kind, media_type, original_name, storage_key, thumb_key, mime, size,
       duration, width, height, has_audio, metadata, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [a.id, a.conversationId, a.kind, a.mediaType, a.originalName, a.storageKey, a.thumbKey, a.mime, a.size, a.duration, a.width, a.height, a.hasAudio ? 1 : 0, JSON.stringify(a.metadata), a.createdAt],
+     VALUES (?, COALESCE(?, (SELECT workspace_id FROM conversations WHERE id = ?), 'local'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [a.id, a.workspaceId ?? null, a.conversationId, a.conversationId, a.kind, a.mediaType, a.originalName, a.storageKey, a.thumbKey, a.mime, a.size, a.duration, a.width, a.height, a.hasAudio ? 1 : 0, JSON.stringify(a.metadata), a.createdAt],
   );
 }
 

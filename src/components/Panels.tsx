@@ -2,6 +2,7 @@
 
 import { Film, ImagePlus, Loader2, Search, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { authClient } from "@/lib/client/auth";
 import { api, formatBytes, uploadFile, type AppStatus, type BrandKitView, type ConversationSummary, type PublicAsset } from "@/lib/client/api";
 import { UsageList, useUsage } from "./UsageMeters";
 
@@ -127,8 +128,32 @@ export function AccountPanel({ onClose, onDataDeleted }: { onClose: () => void; 
       <section className="mb-6">
         <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-faint">Profile</h3>
         <div className="rounded-xl border border-line bg-card p-4 text-sm">
-          <p>Local creator</p>
-          <p className="mt-1 text-xs text-muted">This private prototype runs on your computer without sign-in. Accounts arrive with authentication.</p>
+          {status?.account.signedIn ? (
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate">{status.account.name || status.account.email}</p>
+                <p className="mt-0.5 truncate text-xs text-muted">
+                  {status.account.email} · {status.account.workspaceName} ({status.account.role})
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  await authClient.signOut().catch(() => undefined);
+                  // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+                  window.location.href = "/login";
+                }}
+                className="shrink-0 rounded-full border border-line-strong px-3 py-1.5 text-xs text-ink hover:bg-bg-2"
+              >
+                Sign out
+              </button>
+            </div>
+          ) : (
+            <>
+              <p>Local creator</p>
+              <p className="mt-1 text-xs text-muted">Accounts are off on this computer (local development). Deployed servers always require sign-in.</p>
+            </>
+          )}
         </div>
       </section>
 
@@ -144,8 +169,8 @@ export function AccountPanel({ onClose, onDataDeleted }: { onClose: () => void; 
             <Stat k="Renders" v={`${status.usage.succeeded} done · ${status.usage.failed} failed`} />
             <Stat k="Render time" v={`${status.usage.renderSeconds}s`} />
             <Stat k="Video produced" v={`${status.usage.outputSeconds}s`} />
-            <Stat k="Storage used" v={formatBytes(status.storage.usedBytes)} />
-            <Stat k="Disk free" v={formatBytes(status.storage.freeBytes)} />
+            {status.storage && <Stat k="Storage used" v={formatBytes(status.storage.usedBytes)} />}
+            {status.storage && <Stat k="Disk free" v={formatBytes(status.storage.freeBytes)} />}
             <Stat k="Render worker" v={status.worker.alive ? "running" : "offline"} warn={!status.worker.alive} />
           </dl>
         ) : (

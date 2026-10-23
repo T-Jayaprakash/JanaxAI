@@ -19,6 +19,7 @@ export type KitKind = (typeof KIT_KINDS)[number];
 
 export interface KitItem {
   id: string;
+  workspaceId: string;
   kind: KitKind;
   name: string;
   /** File name inside kit/ (null for text-only styles). */
@@ -56,6 +57,7 @@ export const KIT_ACCEPT = Object.fromEntries(Object.entries(EXTENSIONS).map(([k,
 type Row = Record<string, unknown>;
 const fromRow = (r: Row): KitItem => ({
   id: r.id as string,
+  workspaceId: (r.workspace_id as string) ?? "local",
   kind: r.kind as KitKind,
   name: r.name as string,
   file: (r.file as string) ?? null,
@@ -66,20 +68,42 @@ const fromRow = (r: Row): KitItem => ({
   createdAt: r.created_at as number,
 });
 
-export async function listKit(kind?: KitKind): Promise<KitItem[]> {
+export async function listKit(workspaceId: string, kind?: KitKind): Promise<KitItem[]> {
   const rows = kind
-    ? await getDb().all<Row>("SELECT * FROM kit_items WHERE kind = ? ORDER BY created_at DESC", [kind])
-    : await getDb().all<Row>("SELECT * FROM kit_items ORDER BY created_at DESC");
+    ? await getDb().all<Row>("SELECT * FROM kit_items WHERE workspace_id = ? AND kind = ? ORDER BY created_at DESC", [workspaceId, kind])
+    : await getDb().all<Row>("SELECT * FROM kit_items WHERE workspace_id = ? ORDER BY created_at DESC", [workspaceId]);
   return rows.map(fromRow);
 }
 
-export async function getKitItem(id: string): Promise<KitItem | null> {
-  const r = await getDb().get<Row>("SELECT * FROM kit_items WHERE id = ?", [id]);
+/** The item only if it belongs to `workspaceId`. */
+export async function getKitItem(id: string, workspaceId: string): Promise<KitItem | null> {
+  const r = await getDb().get<Row>("SELECT * FROM kit_items WHERE id = ? AND workspace_id = ?", [id, workspaceId]);
   return r ? fromRow(r) : null;
 }
 
-export function kitDir(): string {
-  return getStorage().ensureDir("kit");
+const SAFE_WORKSPACE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** Storage key of an item's file: kits/<workspace>/<file>. */
+export function kitKey(item: Pick<KitItem, "workspaceId" | "file">): string {
+  if (!SAFE_WORKSPACE.test(item.workspaceId) || !item.file) throw new Error("Invalid kit file");
+  return `kits/${item.workspaceId}/${item.file}`;
+}
+
+/** The workspace's kit folder (linked into its projects as kit/). */
+export function kitDir(workspaceId = "local"): string {
+  if (!SAFE_WORKSPACE.test(workspaceId)) throw new Error("Invalid workspace id");
+  const storage = getStorage();
+  const dir = storage.ensureDir(`kits/${workspaceId}`);
+  // Kit files from before accounts lived in a shared kit/ folder: they belong to the local workspace.
+  if (workspaceId === "local") {
+    const legacy = storage.ensureDir("kit");
+    for (const f of fs.readdirSync(legacy)) {
+      try {
+        fs.renameSync(`${legacy}/${f}`, `${dir}/${f}`);
+      } catch {}
+    }
+  }
+  return dir;
 }
 
 /** CSS-safe family name for a user font, so HTML can say font-family:'Kit Name'. */
@@ -126,7 +150,9 @@ export async function ingestKitFile(input: {
   notes?: string;
   credit?: string;
   declaredSize?: number;
+  workspaceId?: string;
 }): Promise<KitItem> {
+  const workspaceId = input.workspaceId ?? "local";
   const original = sanitizeDisplayName(input.originalName);
   const ext = (original.split(".").pop() ?? "").toLowerCase();
   if (!EXTENSIONS[input.kind].includes(ext)) {
@@ -139,8 +165,8 @@ export async function ingestKitFile(input: {
   const id = newId("kit");
   const fileName = `${id}.${ext === "jpeg" ? "jpg" : ext}`;
   const storage = getStorage();
-  kitDir();
-  const abs = storage.absolutePath(`kit/${fileName}`);
+  kitDir(workspaceId);
+  const abs = storage.absolutePath(kitKey({ workspaceId, file: fileName }));
   let size = 0;
   const out = fs.createWriteStream(abs, { flags: "wx" });
   try {
@@ -180,7 +206,7 @@ export async function ingestKitFile(input: {
         meta.duration = duration;
       }
     }
-    const item: KitItem = { id, kind: input.kind, name, file: fileName, notes: cleanText(input.notes, 2000), credit: cleanText(input.credit, 200) || null, meta, size, createdAt: now() };
+    const item: KitItem = { id, workspaceId, kind: input.kind, name, file: fileName, notes: cleanText(input.notes, 2000), credit: cleanText(input.credit, 200) || null, meta, size, createdAt: now() };
     await insertKitItem(item);
     return item;
   } catch (err) {
@@ -198,40 +224,40 @@ export const StyleSchema = z.object({
   notes: z.string().trim().min(1).max(4000),
 });
 
-export async function saveStyle(input: z.infer<typeof StyleSchema>): Promise<KitItem> {
-  const existing = (await listKit("style")).find((s) => s.name.toLowerCase() === input.name.toLowerCase());
+export async function saveStyle(input: z.infer<typeof StyleSchema>, workspaceId: string): Promise<KitItem> {
+  const existing = (await listKit(workspaceId, "style")).find((s) => s.name.toLowerCase() === input.name.toLowerCase());
   if (existing) {
     await getDb().run("UPDATE kit_items SET notes = ? WHERE id = ?", [cleanText(input.notes, 4000), existing.id]);
     return { ...existing, notes: cleanText(input.notes, 4000) };
   }
-  const item: KitItem = { id: newId("kit"), kind: "style", name: cleanText(input.name, 80), file: null, notes: cleanText(input.notes, 4000), credit: null, meta: {}, size: 0, createdAt: now() };
+  const item: KitItem = { id: newId("kit"), workspaceId, kind: "style", name: cleanText(input.name, 80), file: null, notes: cleanText(input.notes, 4000), credit: null, meta: {}, size: 0, createdAt: now() };
   await insertKitItem(item);
   return item;
 }
 
 async function insertKitItem(i: KitItem) {
-  await getDb().run("INSERT INTO kit_items (id, kind, name, file, notes, credit, meta, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [
-    i.id, i.kind, i.name, i.file, i.notes, i.credit, JSON.stringify(i.meta), i.size, i.createdAt,
+  await getDb().run("INSERT INTO kit_items (id, workspace_id, kind, name, file, notes, credit, meta, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+    i.id, i.workspaceId, i.kind, i.name, i.file, i.notes, i.credit, JSON.stringify(i.meta), i.size, i.createdAt,
   ]);
 }
 
-export async function updateKitItem(id: string, patch: { name?: string; notes?: string; credit?: string | null }): Promise<KitItem | null> {
-  const item = await getKitItem(id);
+export async function updateKitItem(id: string, patch: { name?: string; notes?: string; credit?: string | null }, workspaceId: string): Promise<KitItem | null> {
+  const item = await getKitItem(id, workspaceId);
   if (!item) return null;
   const next = {
     name: patch.name !== undefined ? cleanText(patch.name, 80) || item.name : item.name,
     notes: patch.notes !== undefined ? cleanText(patch.notes, item.kind === "style" ? 4000 : 2000) : item.notes,
     credit: patch.credit !== undefined ? cleanText(patch.credit, 200) || null : item.credit,
   };
-  await getDb().run("UPDATE kit_items SET name = ?, notes = ?, credit = ? WHERE id = ?", [next.name, next.notes, next.credit, id]);
+  await getDb().run("UPDATE kit_items SET name = ?, notes = ?, credit = ? WHERE id = ? AND workspace_id = ?", [next.name, next.notes, next.credit, id, workspaceId]);
   return { ...item, ...next };
 }
 
-export async function deleteKitItem(id: string): Promise<boolean> {
-  const item = await getKitItem(id);
+export async function deleteKitItem(id: string, workspaceId: string): Promise<boolean> {
+  const item = await getKitItem(id, workspaceId);
   if (!item) return false;
-  if (item.file) getStorage().remove(`kit/${item.file}`);
-  await getDb().run("DELETE FROM kit_items WHERE id = ?", [id]);
+  if (item.file) getStorage().remove(kitKey(item));
+  await getDb().run("DELETE FROM kit_items WHERE id = ? AND workspace_id = ?", [id, workspaceId]);
   return true;
 }
 

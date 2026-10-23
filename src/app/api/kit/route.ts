@@ -1,16 +1,21 @@
+import { requireAccess } from "@/lib/auth/access";
 import { UploadError } from "@/lib/assets";
 import { dynamic, jsonError, rateLimit } from "@/lib/http";
 import { ingestKitFile, KIT_KINDS, listKit, toPublicKitItem, type KitKind } from "@/lib/kit";
 
-export async function GET() {
+export async function GET(req: Request) {
   await dynamic();
-  return Response.json({ items: (await listKit()).map(toPublicKitItem) });
+  const access = await requireAccess(req);
+  if (access instanceof Response) return access;
+  return Response.json({ items: (await listKit(access.workspaceId)).map(toPublicKitItem) });
 }
 
 /** Raw-body upload into My Kit: ?kind=font&name=…&notes=…&credit=…&rights=1 */
 export async function POST(req: Request) {
   const limited = rateLimit(req, "kit", 30);
   if (limited) return limited;
+  const access = await requireAccess(req);
+  if (access instanceof Response) return access;
   const url = new URL(req.url);
   const kind = url.searchParams.get("kind") as KitKind | null;
   const fileName = url.searchParams.get("fileName") ?? "";
@@ -27,6 +32,7 @@ export async function POST(req: Request) {
       notes: url.searchParams.get("notes") ?? undefined,
       credit: url.searchParams.get("credit") ?? undefined,
       declaredSize: Number(req.headers.get("content-length")) || undefined,
+      workspaceId: access.workspaceId,
     });
     return Response.json({ item: toPublicKitItem(item) }, { status: 201 });
   } catch (err) {

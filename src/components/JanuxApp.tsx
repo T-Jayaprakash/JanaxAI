@@ -40,6 +40,7 @@ import { JobCard } from "./JobCard";
 import { LogoMark, Wordmark } from "./Logo";
 import { AccountPanel, ProjectsPanel } from "./Panels";
 import { Sidebar } from "./Sidebar";
+import { UsageRing, useUsage } from "./UsageMeters";
 import { VideoResult } from "./VideoResult";
 
 const SUGGESTIONS = [
@@ -499,11 +500,14 @@ export function JanuxApp() {
               ensureConversation={ensureConversation}
               onSend={send}
             />
-            <p className="mt-2 text-center text-[11px] text-faint">
-              {status?.assistant
-                ? `${status.assistant.devOnly ? "Dev mode · " : ""}Edits by ${status.assistant.label}. Videos render on this computer.`
-                : "AI chat is off (no API key or local Claude Code). Video edits use the keyword planner."}
-            </p>
+            <div className="mt-1.5 flex items-center gap-2">
+              <p className="min-w-0 flex-1 text-center text-[11px] text-faint">
+                {status?.assistant
+                  ? `${status.assistant.devOnly ? "Dev mode · " : ""}Edits by ${status.assistant.label}. Videos render on this computer.`
+                  : "AI chat is off (no API key or local Claude Code). Video edits use the keyword planner."}
+              </p>
+              <UsageRing report={usage} />
+            </div>
           </div>
         </div>
 

@@ -1,52 +1,6 @@
-import fs from "node:fs";
-import path from "node:path";
-import { ffmpeg, MediaError, runProcess } from "../media/ffmpeg";
+import { ffmpeg } from "../media/ffmpeg";
 
-/**
- * Voiceover and sound effects made on this machine, with no paid service:
- * - Voiceover uses the operating system's speech voices (macOS `say`). They
- *   are clear but synthetic; a cloud voice provider can replace this later.
- * - Sound effects are synthesised with FFmpeg audio generators.
- */
-
-export const VOICES: Record<string, { voice: string; note: string }[]> = {
-  ta: [{ voice: "Vani", note: "Tamil, female" }],
-  en: [
-    { voice: "Rishi", note: "Indian English, male" },
-    { voice: "Tara", note: "Indian English, female" },
-    { voice: "Aman", note: "Indian English, male" },
-  ],
-  hi: [{ voice: "Lekha", note: "Hindi, female" }],
-  te: [{ voice: "Geeta", note: "Telugu, female" }],
-  kn: [{ voice: "Soumya", note: "Kannada, female" }],
-  bn: [{ voice: "Piya", note: "Bengali, female" }],
-};
-
-export function voiceoverAvailable(): boolean {
-  return process.platform === "darwin" && fs.existsSync("/usr/bin/say");
-}
-
-/** Speaks `text` and writes a 48 kHz stereo AAC file, loudness-normalised for video. */
-export async function makeVoiceover(opts: { text: string; language: string; voice?: string; speed: number; output: string; workDir: string }): Promise<void> {
-  if (!voiceoverAvailable()) {
-    throw new MediaError("Voiceover needs the built-in voices of macOS; no cloud voice provider is configured on this server.", "say missing", "tts_unavailable");
-  }
-  const choices = VOICES[opts.language] ?? VOICES.en;
-  const voice = choices.find((v) => v.voice === opts.voice)?.voice ?? choices[0].voice;
-  fs.mkdirSync(opts.workDir, { recursive: true });
-  const textFile = path.join(opts.workDir, `vo-${Date.now()}.txt`);
-  const aiff = path.join(opts.workDir, `vo-${Date.now()}.aiff`);
-  fs.writeFileSync(textFile, opts.text);
-  // ~175 words per minute is the default speaking rate.
-  const rate = Math.round(175 * opts.speed);
-  try {
-    await runProcess("/usr/bin/say", ["-v", voice, "-r", String(rate), "-o", aiff, "-f", textFile], { timeoutMs: 120_000 });
-    await ffmpeg(["-i", aiff, "-af", "loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000", "-ac", "2", "-c:a", "aac", "-b:a", "192k", opts.output], { timeoutMs: 120_000 });
-  } finally {
-    fs.rmSync(textFile, { force: true });
-    fs.rmSync(aiff, { force: true });
-  }
-}
+/** Sound effects synthesised with FFmpeg audio generators: no samples, no licences. Voiceover lives in voice.ts. */
 
 export const SFX_TYPES = [
   "whoosh", "swipe", "pop", "click", "ding", "chime", "riser", "impact", "boom", "glitch", "typing", "shutter",

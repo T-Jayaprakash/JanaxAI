@@ -6,6 +6,7 @@ import { getPlanner } from "@/lib/planner";
 import { selectBackend } from "@/lib/agent/provider";
 import { chromePath } from "@/lib/graphics/render";
 import { isSpeechAvailable } from "@/lib/speech/transcribe";
+import { activeVoiceProvider, voiceProviders } from "@/lib/studio/voice";
 import { freeDiskBytes, storageBytesUsed } from "@/lib/storage";
 
 /** Real usage numbers for the Account panel — nothing here is estimated. */
@@ -28,7 +29,14 @@ export async function GET() {
       const b = selectBackend();
       return b ? { id: b.id, label: b.label, devOnly: b.devOnly } : null;
     })(),
-    capabilities: { designs: !!chromePath(), voiceNotes: isSpeechAvailable() },
+    capabilities: {
+      designs: !!chromePath(),
+      voiceNotes: isSpeechAvailable(),
+      voiceover: (() => {
+        const p = voiceProviders().find((x) => x.id === activeVoiceProvider());
+        return p ? { label: p.label, premium: p.premium } : null;
+      })(),
+    },
     limits: {
       maxUploadMB: Math.round(cfg.maxUploadBytes / 1048576),
       maxFilesPerMessage: cfg.maxFilesPerMessage,

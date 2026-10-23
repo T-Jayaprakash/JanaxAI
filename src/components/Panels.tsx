@@ -163,6 +163,14 @@ export function AccountPanel({ onClose, onDataDeleted }: { onClose: () => void; 
             <li>Video planner fallback: {status.planner.label}</li>
             <li>Designs: {status.capabilities.designs ? "Chrome renderer ready" : "needs Google Chrome"}</li>
             <li>Voice notes: {status.capabilities.voiceNotes ? "local Whisper (any language)" : "run npm run setup:speech"}</li>
+            <li>
+              Voiceover:{" "}
+              {status.capabilities.voiceover
+                ? status.capabilities.voiceover.premium
+                  ? `${status.capabilities.voiceover.label} (premium)`
+                  : `${status.capabilities.voiceover.label}: add an ElevenLabs or Google TTS key for natural voices`
+                : "not available"}
+            </li>
             <li>Video engine: FFmpeg on this computer</li>
           </ul>
         </section>

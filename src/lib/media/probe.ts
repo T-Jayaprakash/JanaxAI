@@ -11,11 +11,14 @@ export interface ProbeResult {
   audioCodec: string | null;
   fps: number | null;
   rotation: number;
+  /** Pixel format of the video stream (e.g. yuva444p10le means it has transparency). */
+  pixFmt: string | null;
 }
 
 interface RawStream {
   codec_type?: string;
   codec_name?: string;
+  pix_fmt?: string;
   width?: number;
   height?: number;
   avg_frame_rate?: string;
@@ -68,6 +71,7 @@ export async function probe(filePath: string): Promise<ProbeResult> {
     hasAudio: !!a,
     videoCodec: v?.codec_name ?? null,
     audioCodec: a?.codec_name ?? null,
+    pixFmt: v?.pix_fmt ?? null,
     fps: parseRate(v?.avg_frame_rate),
     rotation,
   };

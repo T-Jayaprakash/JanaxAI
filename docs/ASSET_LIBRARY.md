@@ -23,6 +23,23 @@ The studio's **Library** panel lets you browse it. The agent searches it with `s
 | Colour looks | 10 | Generated 3D LUTs (teal-orange, Tamil cinema warm, golden hour, vintage fade, …) | Included with the app | No |
 | Meme formats | 12 | Editing recipes (zoom punch, freeze "wait for it", to be continued, POV, …) | Included with the app | No |
 
+## My Kit (the user's own resources)
+
+Users import their own resources in **Library → My kit**, and the editor prefers them over library defaults:
+
+| Kind | Formats | Check on upload | How the editor uses it |
+| --- | --- | --- | --- |
+| Font | TTF, OTF, WOFF, WOFF2 (15 MB) | font file signature | `font-family:'<name>'` in render_animation, embedded automatically |
+| Colour LUT | .cube 3D (20 MB) | `LUT_3D_SIZE` and exactly size³ numeric rows | `lut3d=kit/<file>` |
+| Logo / image | PNG, JPG, WebP (20–30 MB) | decoded with ffprobe | `<img src="kit/<file>">` (inlined) or an FFmpeg input |
+| Video element | MOV, WebM, MP4, GIF (300 MB) | decoded; transparency detected from the pixel format | FFmpeg overlay input |
+| Sound effect / music | WAV, MP3, M4A, AAC, OGG, FLAC | decoded, duration measured | FFmpeg audio input |
+| Style | text, 4,000 characters | — | a recipe the editor follows; the agent can also save one with `save_style` |
+
+- Uploads need the user to confirm they own the file or have a licence for it. An optional credit line is added to delivery credits whenever the item is used.
+- Files live in `data/kit/` with server-generated names. Each workspace links them read-only as `kit/`, and the FFmpeg guard lets commands read `kit/` but never write there.
+- The agent sees the kit in its turn context (styles in full, everything else one line each). `search_library` lists matching kit items first, tagged `[user's kit]`.
+
 ## Licence tracking
 
 - Every catalog entry carries its licence (`src/lib/library/types.ts`).

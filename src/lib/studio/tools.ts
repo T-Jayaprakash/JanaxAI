@@ -14,13 +14,17 @@ import type { EditSpec } from "../spec";
 import { freeDiskBytes, getStorage } from "../storage";
 import { addActivity, finishActivity, patchMeta, updateActivity } from "../agent/meta";
 import { analyzeAudio } from "./audio";
-import { makeSoundEffect, makeVoiceover, SFX_DEFAULT_DURATION, SFX_TYPES } from "./audioGen";
+import { makeSoundEffect, SFX_DEFAULT_DURATION, SFX_TYPES } from "./audioGen";
+import { activeVoiceProvider, listVoices, makeVoiceover, polishVoice, voiceProviders, VOICE_LANGUAGES } from "./voice";
 import { creditsFor, emojiRuntime, findEntry, fontFaceCss, libraryInstalled, searchLibrary } from "../library";
 import { buildCaptionHtml, CAPTION_STYLES, type CaptionWord } from "../library/captions";
 import { MEME_FORMATS } from "../library/memes";
 import { STICKERS } from "../library/stickers";
 import { OVERLAY_TRANSITIONS } from "../library/transitions";
+import { ASSET_KINDS } from "../library/types";
+import { getKitItem, kitUsage, saveStyle, StyleSchema } from "../kit";
 import { checkFfmpegArgs } from "./ffmpegGuard";
+import { cropPlan, followPath, trackerBinary, trackingSupported, trackSubjects } from "./track";
 import { inputName, resolveInWorkspace, syncWorkspace, workspaceDir } from "./workspace";
 import { runProcess } from "../media/ffmpeg";
 
@@ -305,9 +309,20 @@ const runFfmpegTool = tool({
       const detail = err instanceof MediaError ? (err.diagnostic ?? err.userMessage) : String(err);
       return { text: `FFmpeg failed:\n${detail.slice(-3000)}`, isError: true };
     }
+    recordUsedAssets(ctx.conversationId, usedInArgs(input.args));
     return { text: `Done.\n${(await describeOutputs(ctx.conversationId, plan.outputs)).join("\n")}` };
   },
 });
+
+/** Library looks and kit files an FFmpeg command reads, as asset ids. */
+function usedInArgs(args: string[]): string[] {
+  const ids = new Set<string>();
+  for (const a of args) {
+    for (const m of a.matchAll(/lib\/looks\/([a-z0-9-]+)\.cube/g)) ids.add(`look:${m[1]}`);
+    for (const m of a.matchAll(/kit\/(kit_[A-Za-z0-9]+)\.[a-z0-9]+/g)) ids.add(`kit:${m[1]}`);
+  }
+  return [...ids];
+}
 
 /**
  * Readies a composition for rendering: inlines workspace images, embeds the
@@ -347,9 +362,12 @@ function readUsedAssets(conversationId: string): string[] {
 
 /** Inline workspace images referenced from HTML (src="in/..." or url(work/...)). */
 function inlineWorkspaceImages(conversationId: string, html: string): string {
-  return html.replace(/((?:in|work)\/[A-Za-z0-9._-]+\.(?:png|jpe?g|webp|gif|svg))/g, (m) => {
+  const kitUsed: string[] = [];
+  const out = html.replace(/((?:in|work|kit)\/[A-Za-z0-9._-]+\.(?:png|jpe?g|webp|gif|svg))/g, (m) => {
     try {
       const abs = resolveInWorkspace(conversationId, m, { mustExist: true });
+      const kitId = m.match(/^kit\/(kit_[A-Za-z0-9]+)\./)?.[1];
+      if (kitId) kitUsed.push(`kit:${kitId}`);
       if (fs.statSync(abs).size > 8 * 1024 * 1024) return m;
       const ext = path.extname(abs).slice(1).toLowerCase();
       const mime = ext === "jpg" || ext === "jpeg" ? "image/jpeg" : ext === "svg" ? "image/svg+xml" : `image/${ext}`;
@@ -358,6 +376,8 @@ function inlineWorkspaceImages(conversationId: string, html: string): string {
       return m;
     }
   });
+  recordUsedAssets(conversationId, kitUsed);
+  return out;
 }
 
 const renderAnimationTool = tool({
@@ -404,18 +424,19 @@ const renderAnimationTool = tool({
 const searchLibraryTool = tool({
   name: "search_library",
   description:
-    "Search JANUXAI's asset library: 80+ fonts (Tamil, Indian scripts, display, script), 58 xfade + 14 overlay transitions, 20 caption styles, animated stickers, 59 animated emoji, 30 sound effects, 10 colour looks (LUTs) and 12 meme formats. Search before designing so edits use professional assets. Returns ids and how to use each.",
+    "Search the user's own imported kit (their brand fonts, LUTs, logos, overlays, sounds, saved styles; listed first, ids kit:...) and JANUXAI's asset library: 80+ fonts (Tamil, Indian scripts, display, script), 58 xfade + 14 overlay transitions, 20 caption styles, animated stickers, 59 animated emoji, 30 sound effects, 10 colour looks (LUTs) and 12 meme formats. Search before designing so edits use professional assets. Returns ids and how to use each.",
   schema: z.object({
     query: z.string().max(200).describe("e.g. 'tamil bold headline font', 'glitch transition', 'karaoke captions', 'sale sticker', 'warm cinematic look'"),
-    kind: z.enum(["font", "transition", "caption_style", "sticker", "emoji", "sfx", "meme_format", "look"]).optional(),
+    kind: z.enum(ASSET_KINDS).optional(),
     limit: z.number().int().min(1).max(30).optional(),
   }),
   label: (i) => `Searching the library for “${i.query}”`,
   async run(input) {
-    if (!libraryInstalled()) return { text: "The asset library isn't installed yet (npm run setup:library). Fonts from Google Fonts links still work.", isError: true };
-    const hits = searchLibrary(input.query, input.kind, input.limit ?? 12);
-    if (!hits.length) return { text: "Nothing matched. Try broader words, or a kind filter." };
-    return { text: hits.map((h) => `- ${h.id} — ${h.name}: ${h.description}\n  use: ${h.usage}`).join("\n") };
+    const installed = libraryInstalled();
+    const hits = searchLibrary(input.query, input.kind, input.limit ?? 12).filter((h) => installed || h.source === "kit");
+    const note = installed ? "" : "\n(The shared asset library isn't installed on this server yet: npm run setup:library. Only the user's kit is searchable.)";
+    if (!hits.length) return { text: `Nothing matched. Try broader words, or a kind filter.${note}` };
+    return { text: hits.map((h) => `- ${h.id} — ${h.name}${h.source === "kit" ? " [user's kit]" : ""}: ${h.description}\n  use: ${h.usage}`).join("\n") + note };
   },
 });
 
@@ -431,6 +452,11 @@ const getAssetTool = tool({
   label: (i) => `Getting ${i.id.split(":")[1] ?? i.id} from the library`,
   async run(input) {
     const [kind, key] = input.id.split(":");
+    if (kind === "kit") {
+      const item = getKitItem(key);
+      if (!item) return { text: "That kit item no longer exists.", isError: true };
+      return { text: `${item.name} (user's ${item.kind})${item.file ? `\nfile: kit/${item.file}` : ""}${item.notes ? `\nnotes: ${item.notes}` : ""}\nuse: ${kitUsage(item)}${item.credit ? `\ncredit when used: ${item.credit}` : ""}` };
+    }
     if (kind === "sticker") {
       const st = STICKERS.find((x) => x.id === key);
       if (!st) return { text: "Unknown sticker.", isError: true };
@@ -630,35 +656,94 @@ const deliverTool = tool({
   },
 });
 
+const LANG_NAMES: Record<string, string> = { ta: "Tamil", en: "English", hi: "Hindi", te: "Telugu", ml: "Malayalam", kn: "Kannada", bn: "Bengali" };
+
+function voiceProviderNote(): string {
+  const active = activeVoiceProvider();
+  const p = voiceProviders().find((x) => x.id === active);
+  if (!p) return "No voice provider is configured.";
+  return p.premium ? `Voice provider: ${p.label} (premium, natural).` : `Voice provider: ${p.label}. This is a synthetic draft voice: tell the user, and offer to polish their own recording (polish_voice) or to use a premium voice once ElevenLabs or Google TTS is set up.`;
+}
+
+const listVoicesTool = tool({
+  name: "list_voices",
+  description: "List the voiceover voices available for a language (with gender/style notes), and which voice provider is active. Pick a voice that fits the brand: warm, energetic, calm, authoritative.",
+  schema: z.object({ language: z.enum(VOICE_LANGUAGES) }),
+  label: (i) => `Checking ${LANG_NAMES[i.language]} voices`,
+  async run(input) {
+    try {
+      const voices = await listVoices(input.language);
+      const lines = voices.slice(0, 40).map((v) => `- ${v.id}: ${v.name}${v.note ? ` (${v.note})` : ""}`);
+      return { text: `${voiceProviderNote()}\n${lines.length ? lines.join("\n") : "No voices found for this language."}` };
+    } catch (err) {
+      return { text: err instanceof MediaError ? err.userMessage : String(err), isError: true };
+    }
+  },
+});
+
 const voiceoverTool = tool({
   name: "generate_voiceover",
   description:
-    "Turn a script into a spoken voiceover audio file (.m4a) with this computer's voices: Tamil (Vani), Indian English (Rishi, Tara, Aman), Hindi (Lekha), Telugu (Geeta), Kannada (Soumya), Bengali (Piya). Write Tamil scripts in Tamil script (English words may stay in English); romanized Tanglish is read badly. Returns the duration so you can time the edit. Voices are clear but synthetic: offer the user the option to record their own voice instead.",
+    "Turn a script into a spoken voiceover (.m4a), mastered for video. Languages: ta, en, hi, te, ml, kn, bn. Write Tamil and other Indian-language scripts in their own script (English brand words may stay in English); romanized Tanglish is read badly. Write for the ear: short sentences, natural pauses with commas and full stops. Premium providers also save word timings (cache/vo-words-*.json) usable as render_captions transcript. Returns the duration so you can time the edit.",
   schema: z.object({
     text: z.string().min(1).max(5000),
-    language: z.enum(["ta", "en", "hi", "te", "kn", "bn"]),
-    voice: z.string().max(20).optional(),
-    speed: z.number().min(0.6).max(1.6).optional().describe("1 = normal; 1.1 for energetic reels"),
+    language: z.enum(VOICE_LANGUAGES),
+    voice: z.string().max(80).optional().describe("A voice id from list_voices"),
+    speed: z.number().min(0.7).max(1.3).optional().describe("1 = natural; 1.05-1.1 for energetic reels"),
+    expressiveness: z.number().min(0).max(1).optional().describe("0 calm/corporate, 0.4 natural, 0.8 hype"),
     output: RelPath.describe("work/....m4a"),
   }),
-  label: (i) => `Recording voiceover (${i.language === "ta" ? "Tamil" : i.language === "en" ? "English" : i.language})`,
+  label: (i) => `Recording voiceover (${LANG_NAMES[i.language]})`,
   async run(input, ctx) {
     syncWorkspace(ctx.conversationId);
     if (!input.output.endsWith(".m4a")) return { text: "Voiceovers are saved as .m4a.", isError: true };
     const out = resolveInWorkspace(ctx.conversationId, input.output, { writable: true });
+    let result;
     try {
-      await makeVoiceover({
+      result = await makeVoiceover({
         text: input.text,
         language: input.language,
         voice: input.voice,
         speed: input.speed ?? 1,
+        expressiveness: input.expressiveness,
         output: out,
         workDir: path.dirname(resolveInWorkspace(ctx.conversationId, "cache/x")),
       });
     } catch (err) {
       return { text: err instanceof MediaError ? err.userMessage : String(err), isError: true };
     }
-    return { text: `Voiceover ready.\n${(await describeOutputs(ctx.conversationId, [input.output])).join("\n")}` };
+    let timings = "";
+    if (result.words?.length) {
+      const rel = `cache/vo-words-${path.basename(input.output, ".m4a")}.json`;
+      fs.writeFileSync(resolveInWorkspace(ctx.conversationId, rel), JSON.stringify({ language: input.language, words: result.words }));
+      timings = `\nWord timings: ${rel} (${result.words.length} words; offset them by where you place the voiceover).`;
+    }
+    return { text: `Voiceover ready (${result.premium ? "premium" : "draft"} voice ${result.voice}).\n${voiceProviderNote()}\n${(await describeOutputs(ctx.conversationId, [input.output])).join("\n")}${timings}` };
+  },
+});
+
+const polishVoiceTool = tool({
+  name: "polish_voice",
+  description:
+    "Studio clean-up for a voice the user recorded (voice note, phone or lapel audio, or a video's own speech): noise reduction, rumble cut, de-essing, compression, presence and broadcast loudness. Use it on every user voiceover and on talking-head audio that sounds roomy or noisy. Output .m4a; mix it back in with run_ffmpeg.",
+  schema: z.object({
+    input: RelPath,
+    output: RelPath.describe("work/....m4a"),
+    denoise: z.enum(["light", "strong"]).optional(),
+    warmth: z.boolean().optional().describe("Add low-mid warmth (good for thin phone recordings)"),
+  }),
+  label: () => "Polishing the voice",
+  async run(input, ctx) {
+    syncWorkspace(ctx.conversationId);
+    if (!input.output.endsWith(".m4a")) return { text: "Polished voice is saved as .m4a.", isError: true };
+    try {
+      const src = resolveInWorkspace(ctx.conversationId, input.input, { mustExist: true });
+      const out = resolveInWorkspace(ctx.conversationId, input.output, { writable: true });
+      await polishVoice({ input: src, output: out, denoise: input.denoise ?? "light", warmth: input.warmth ?? false });
+    } catch (err) {
+      return { text: err instanceof MediaError ? `${err.userMessage}${err.diagnostic ? `\n${err.diagnostic.slice(-400)}` : ""}` : String(err), isError: true };
+    }
+    return { text: `Voice polished.\n${(await describeOutputs(ctx.conversationId, [input.output])).join("\n")}` };
   },
 });
 
@@ -678,6 +763,132 @@ const sfxTool = tool({
     const out = resolveInWorkspace(ctx.conversationId, input.output, { writable: true });
     await makeSoundEffect(input.type, input.duration ?? SFX_DEFAULT_DURATION[input.type], out, input.volume ?? 1);
     return { text: `Sound effect ready: ${input.output} (${(input.duration ?? SFX_DEFAULT_DURATION[input.type]).toFixed(2)}s).` };
+  },
+});
+
+const reframeTool = tool({
+  name: "reframe_subject",
+  description:
+    "Reframe a clip so the camera follows the person (face, else upper body), like a cameraman: 16:9 → 9:16 for reels, or any aspect. zoom >1 makes a tighter shot of the same subject; render a second version at zoom 1.25-1.4 and cut to it on emphasis words for professional punch-ins. Writes the reframed video (audio kept) and reports how often a subject was found. macOS only.",
+  schema: z.object({
+    input: RelPath,
+    output: RelPath.describe("work/....mp4"),
+    aspect: z.enum(["9:16", "4:5", "1:1", "16:9"]).optional().describe("Default 9:16"),
+    zoom: z.number().min(1).max(2.5).optional(),
+    start: z.number().min(0).optional(),
+    end: z.number().positive().optional(),
+    smoothness: z.enum(["steady", "normal", "responsive"]).optional().describe("steady for interviews/podcasts, responsive for moving subjects"),
+  }),
+  label: (i) => `Following the subject in ${displayName(i.input)}${i.zoom && i.zoom > 1 ? ` (zoom ${i.zoom}x)` : ""}`,
+  async run(input, ctx) {
+    syncWorkspace(ctx.conversationId);
+    if (!input.output.endsWith(".mp4")) return { text: "Reframed clips are saved as .mp4.", isError: true };
+    if (!trackingSupported() && !fs.existsSync(trackerBinary())) return { text: "Face tracking needs a Mac (Apple Vision) and isn't available on this server. Use a centred crop with run_ffmpeg instead.", isError: true };
+    const src = resolveInWorkspace(ctx.conversationId, input.input, { mustExist: true });
+    const out = resolveInWorkspace(ctx.conversationId, input.output, { writable: true });
+    const info = await probe(src);
+    if (!info.hasVideo || !info.duration) return { text: "That file has no video to reframe.", isError: true };
+    const start = Math.min(input.start ?? 0, info.duration - 0.2);
+    const end = Math.min(input.end ?? info.duration, info.duration);
+    // Track the cut-out section on its own timeline so the expressions start at t=0.
+    const cache = path.dirname(resolveInWorkspace(ctx.conversationId, "cache/x"));
+    let source = src;
+    let tmp: string | null = null;
+    try {
+      if (start > 0 || end < info.duration) {
+        tmp = path.join(cache, `track-src-${Date.now()}.mp4`);
+        await ffmpeg(["-ss", start.toFixed(3), "-to", end.toFixed(3), "-i", src, "-c:v", "libx264", "-preset", "veryfast", "-crf", "14", "-c:a", "aac", "-b:a", "192k", tmp], { timeoutMs: 600_000, shouldCancel: ctx.shouldCancel });
+        source = tmp;
+      }
+      ctx.progress?.(0.1);
+      const track = await trackSubjects(source, 5, ctx.shouldCancel);
+      ctx.progress?.(0.5);
+      const ease = input.smoothness === "steady" ? 0.18 : input.smoothness === "responsive" ? 0.6 : 0.35;
+      const keys = followPath(track, { ease, deadZone: input.smoothness === "steady" ? 0.06 : 0.04 });
+      const [aw, ah] = (input.aspect ?? "9:16").split(":").map(Number);
+      const plan = cropPlan(track, keys, { aspect: aw / ah, zoom: input.zoom ?? 1 });
+      const outW = aw >= ah ? 1920 : Math.round((1920 * aw) / ah / 2) * 2;
+      const outH = aw >= ah ? Math.round((1920 * ah) / aw / 2) * 2 : 1920;
+      const scaleW = Math.min(outW, plan.w * 2);
+      const scaleH = Math.round((scaleW * outH) / outW / 2) * 2;
+      await ffmpeg(
+        ["-progress", "pipe:1", "-nostats", "-i", source, "-vf", `crop=${plan.w}:${plan.h}:x='${plan.x}':y='${plan.y}',scale=${scaleW}:${scaleH}:flags=lanczos,setsar=1`, "-c:v", "libx264", "-preset", "medium", "-crf", "17", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", out],
+        { timeoutMs: 1_200_000, shouldCancel: ctx.shouldCancel, onProgress: (sec) => ctx.progress?.(0.5 + Math.min(1, sec / Math.max(0.1, end - start)) * 0.5) },
+      );
+      const found = keys.filter((k) => k.found).length;
+      const keyFile = `cache/follow-${path.basename(input.output, ".mp4")}.json`;
+      fs.writeFileSync(resolveInWorkspace(ctx.conversationId, keyFile), JSON.stringify({ source: input.input, start, end, width: track.width, height: track.height, keys }));
+      const pct = keys.length ? Math.round((found / keys.length) * 100) : 0;
+      const note = pct < 40 ? " Few detections: the subject may be small, turned away or not a person; check the framing with view_frames (a centred crop may be better)." : "";
+      return { text: `Reframed ${input.input} (${start.toFixed(2)}-${end.toFixed(2)}s) to ${input.aspect ?? "9:16"}${input.zoom && input.zoom > 1 ? ` at ${input.zoom}x zoom` : ""}. Subject found in ${pct}% of samples.${note}\nFollow path: ${keyFile}\n${(await describeOutputs(ctx.conversationId, [input.output])).join("\n")}` };
+    } catch (err) {
+      return { text: err instanceof MediaError ? `${err.userMessage}${err.diagnostic ? `\n${err.diagnostic.slice(-500)}` : ""}` : String(err), isError: true };
+    } finally {
+      if (tmp) fs.rmSync(tmp, { force: true });
+    }
+  },
+});
+
+const findShotsTool = tool({
+  name: "find_shots",
+  description:
+    "Index a clip into shots for B-roll: detects scene cuts and returns each shot's time range plus a contact sheet with one frame per shot (numbered left-to-right, top-to-bottom). Use it on B-roll uploads, then place matching shots over the spoken words they illustrate (overlay or cutaway, 1.5-4s each, on beats).",
+  schema: z.object({
+    path: RelPath,
+    sensitivity: z.number().min(0.1).max(0.6).optional().describe("Scene-change threshold; lower finds more cuts (default 0.3)"),
+  }),
+  label: (i) => `Finding shots in ${displayName(i.path)}`,
+  async run(input, ctx) {
+    syncWorkspace(ctx.conversationId);
+    const src = resolveInWorkspace(ctx.conversationId, input.path, { mustExist: true });
+    const info = await probe(src);
+    if (!info.hasVideo || !info.duration || info.duration < 0.5) return { text: "That file isn't a video clip.", isError: true };
+    const cache = path.dirname(resolveInWorkspace(ctx.conversationId, "cache/x"));
+    const stamp = Date.now();
+    const scenesFile = path.join(cache, `scenes-${stamp}.txt`);
+    try {
+      await ffmpeg(["-i", src, "-an", "-vf", `scale=320:-2,select='gt(scene,${(input.sensitivity ?? 0.3).toFixed(2)})',metadata=print:file=${path.basename(scenesFile)}`, "-f", "null", "-"], {
+        timeoutMs: 600_000,
+        shouldCancel: ctx.shouldCancel,
+        cwd: cache,
+      });
+      const cuts = [...fs.readFileSync(scenesFile, "utf8").matchAll(/pts_time:([\d.]+)/g)].map((m) => Number(m[1])).filter((t) => t > 0.4 && t < info.duration! - 0.4);
+      const bounds = [0, ...cuts.filter((t, i, a) => i === 0 || t - a[i - 1] > 0.5), info.duration];
+      const shots = bounds.slice(0, -1).map((s, i) => ({ n: i + 1, start: r2(s), end: r2(bounds[i + 1]) }));
+      const shown = shots.slice(0, 24);
+      const cellW = info.width && info.height && info.height > info.width ? 180 : 280;
+      const frames: string[] = [];
+      for (const s of shown) {
+        const f = path.join(cache, `shot-${stamp}-${String(s.n).padStart(3, "0")}.jpg`);
+        await ffmpeg(["-ss", ((s.start + s.end) / 2).toFixed(3), "-i", src, "-frames:v", "1", "-update", "1", "-vf", `scale=${cellW}:-2`, "-q:v", "4", f], { timeoutMs: 30_000 });
+        if (fs.existsSync(f)) frames.push(f);
+      }
+      const sheet = path.join(cache, `shots-${stamp}.jpg`);
+      const cols = frames.length <= 9 ? 3 : 4;
+      if (frames.length) {
+        await ffmpeg(["-framerate", "1", "-i", path.join(cache, `shot-${stamp}-%03d.jpg`), "-vf", `tile=${cols}x${Math.ceil(frames.length / cols)}:padding=4:color=black`, "-frames:v", "1", "-update", "1", "-q:v", "4", sheet], { timeoutMs: 60_000 });
+      }
+      for (const f of frames) fs.rmSync(f, { force: true });
+      const lines = shots.map((s) => `${s.n}. ${s.start}-${s.end}s (${r2(s.end - s.start)}s)`);
+      const more = shots.length > shown.length ? `\n(Contact sheet shows the first ${shown.length} shots.)` : "";
+      return { text: `${input.path}: ${shots.length} shot${shots.length === 1 ? "" : "s"}, ${cols} per row in the sheet.\n${lines.join("\n")}${more}`, images: fs.existsSync(sheet) ? [sheet] : undefined };
+    } catch (err) {
+      return { text: err instanceof MediaError ? err.userMessage : String(err), isError: true };
+    } finally {
+      fs.rmSync(scenesFile, { force: true });
+    }
+  },
+});
+
+const saveStyleTool = tool({
+  name: "save_style",
+  description:
+    "Save an editing style to the user's kit so future edits can match it: the caption preset and colours, fonts, colour look, pace and cut rhythm, transitions, music/SFX approach, voice. Use when the user says things like 'save this as my style' or 'always edit like this'. Saving with an existing name updates it.",
+  schema: StyleSchema,
+  label: (i) => `Saving your style “${i.name}”`,
+  async run(input) {
+    const item = saveStyle(input);
+    return { text: `Saved style "${item.name}" to the user's kit (kit:${item.id}).` };
   },
 });
 
@@ -703,11 +914,16 @@ export const STUDIO_TOOLS = [
   renderAnimationTool,
   renderCaptionsTool,
   renderTransitionTool,
+  reframeTool,
+  findShotsTool,
   searchLibraryTool,
   getAssetTool,
+  listVoicesTool,
   voiceoverTool,
+  polishVoiceTool,
   sfxTool,
   deliverTool,
+  saveStyleTool,
   brandTool,
 ] as StudioTool<z.ZodTypeAny>[];
 

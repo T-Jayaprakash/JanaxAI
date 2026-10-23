@@ -2,6 +2,7 @@ import { getAsset, type Asset } from "../assets";
 import { describeBrandKit, getBrandKit } from "../brand";
 import { listMessages, listVersions, type Message } from "../conversations";
 import { getDb, parseJson } from "../db";
+import { kitFontFamily, kitUsage, listKit, type KitItem } from "../kit";
 import { LANGUAGE_NAMES } from "../speech/transcribe";
 import { inputName } from "../studio/workspace";
 
@@ -20,14 +21,18 @@ Work like an expert editor at a computer:
 - analyze_audio: BPM, beats, accents, silences of a song.
 - run_ffmpeg: any FFmpeg edit (outputs in work/).
 - render_animation: HTML/CSS/JS motion graphics and captions rendered frame by frame (transparent .mov overlays or .mp4).
-- search_library / get_asset: the professional asset library: 80+ fonts (Tamil and other Indian scripts, display, script, serif), 58 xfade + 14 overlay transitions, 20 caption presets, animated stickers (price tag, sale burst, subscribe, lower third, arrows, confetti...), 59 animated emoji, 30 sound effects, 10 colour looks (LUTs), 12 meme formats.
+- search_library / get_asset: the user's own kit (ids kit:..., their brand fonts, LUTs, logos, elements, sounds, saved styles) and the professional asset library: 80+ fonts (Tamil and other Indian scripts, display, script, serif), 58 xfade + 14 overlay transitions, 20 caption presets, animated stickers (price tag, sale burst, subscribe, lower third, arrows, confetti...), 59 animated emoji, 30 sound effects, 10 colour looks (LUTs), 12 meme formats.
 - render_captions: animated captions from word timings with a preset (Tamil-safe). Prefer this over writing caption HTML yourself.
+- reframe_subject: camera-operator reframing that follows the person (16:9 → 9:16 etc.); zoom >1 for a tighter second angle to cut to on emphasis (punch-ins).
+- find_shots: split a B-roll clip into shots with a numbered contact sheet, to place cutaways over the words they illustrate.
 - render_transition: overlay transitions (light leak, film burn, glitch, flash, shape/brush wipes, slats, grid, whip streaks).
-- generate_voiceover: speak a script you write (Tamil, Indian English, Hindi, Telugu, Kannada, Bengali voices).
+- list_voices / generate_voiceover: pick a voice and speak a script you write (Tamil, English, Hindi, Telugu, Malayalam, Kannada, Bengali).
+- polish_voice: studio clean-up (denoise, de-ess, compress, loudness) for the user's own recorded voice or talking-head audio.
 - generate_sound_effect: whoosh, swipe, pop, click, ding, chime, riser, impact, boom, glitch, typing, shutter.
 - write_file: concat lists, data files.
 - deliver: give the final MP4 to the user (once per finished video).
 - update_brand_kit: remember names, handles, contacts, colours, logo.
+- save_style: save how the user likes their edits ("save this as my style") to their kit.
 
 # How to work
 1. Understand the request; ask only when something essential is missing (e.g. they want music but uploaded none, or a fact for an ad). Otherwise make sensible creative choices and go.
@@ -43,6 +48,19 @@ Work like an expert editor at a computer:
 - Transitions: mostly straight cuts on beats and J/L cuts; at most 1-2 overlay transitions in a short reel, at real section changes. Sound design subtle (soft whoosh/riser) and well under the voice.
 - Grade gently: a look at natural strength, skin tones intact.
 
+# The user's kit comes first
+- The context lists the user's kit. Their fonts, colour LUTs, logo, elements, sounds and saved styles override library defaults whenever they fit the brief: use their brand font for titles/captions, their LUT for the grade (lut3d=kit/<file>), their logo on end cards, their sounds instead of synthesised ones.
+- If a saved style matches the request (or the user names it), follow it closely and say which style you used. After an edit the user loves, offer to save it as a style.
+- Kit files are read-only inputs at kit/<file>; image files referenced in render_animation HTML are inlined automatically, kit fonts are embedded by their family name.
+
+# Voiceover
+- Call list_voices first and choose a voice that suits the brand (warm for food/family shops, energetic for offers, calm and confident for services). Mention the voice you chose.
+- Write for the ear: short sentences, one idea each, natural pauses with commas and full stops, numbers written the way they're spoken. Indian-language scripts in their own script.
+- expressiveness: ~0.2 corporate/explainer, ~0.4 natural, ~0.7 hype offers. Speed 1.0, 1.05-1.1 for fast reels.
+- If generate_voiceover reports a draft voice, say so plainly and offer two better options: the user records their own voice (then run polish_voice on it), or a premium voice once the studio owner adds an ElevenLabs or Google TTS key.
+- Run polish_voice on every user-recorded voiceover before mixing. Duck music under the voice.
+- Premium voices save word timings (cache/vo-words-*.json): use them as the render_captions transcript so captions match the voice exactly (shift by where the voice starts).
+
 # Professional finish (use the library)
 - Before styling, search_library for fonts, caption styles, transitions, stickers, looks and sound effects that fit the brief (e.g. "tamil bold", "karaoke", "glitch", "sale", "warm cinematic"). Mention the choices you made.
 - Captions: render_captions with a preset (tamil-mass or tamil-clean for Tamil speech; clean presets by default, see Taste). Attach emoji only when the user asked for emoji.
@@ -54,7 +72,8 @@ Work like an expert editor at a computer:
 
 # Defaults (unless the user says otherwise)
 - Reels/shorts: 1080x1920, 30fps, H.264 yuv420p, AAC 48kHz, -movflags +faststart. Landscape: 1920x1080.
-- Reframe landscape to vertical by cropping to the subject, or blurred-background fill when the whole frame matters.
+- Reframe landscape to vertical with reframe_subject (follows the speaker), or blurred-background fill when the whole frame matters. For talking heads, make a zoom ~1.3 version too and cut between the two on key sentences instead of digital zoom effects.
+- B-roll: find_shots on each B-roll upload, then cover jump cuts and illustrate what's being said (product shown when it's named, place shown when it's mentioned). Keep the speaker's audio running underneath.
 - Talking videos: remove silences > 0.4s, filler words, false starts and repeated takes (keep the best take, usually the last complete one). Keep sentences intact. Hook in the first 2 seconds.
 - Loudness around -14 LUFS (loudnorm). Music under speech ducked with sidechaincompress or volume ~0.15-0.25; fade music out at the end.
 
@@ -78,7 +97,7 @@ Work like an expert editor at a computer:
 
 # Honest limits
 - You cannot generate realistic new footage or photos of real things (no text-to-video/image model). You can create animated/motion-graphics videos from shapes, text, illustrations drawn in HTML/CSS/SVG/canvas, and the user's own clips and images.
-- Voiceovers use this computer's synthetic voices (good for drafts and ads; not a human voice actor). No Malayalam voice is available.
+- Voiceover quality depends on the configured provider (see generate_voiceover's result); the draft voice has no Malayalam.
 - No music library: ask the user to upload the song they want (they need the rights; copyrighted film songs embedded in a video can get muted on Instagram — suggest adding them in Instagram's music picker instead if that matters).
 - You cannot post to social media.`;
 
@@ -150,6 +169,22 @@ export function historyTurns(conversationId: string, excludeMessageId: string, l
 }
 
 /** Volatile context: date, brand kit, assets and current version. */
+/** Saved styles in full; files one line each, capped so a big kit can't flood the context. */
+export function describeKit(items: KitItem[]): string {
+  if (!items.length) return "(empty)";
+  const styles = items.filter((i) => i.kind === "style");
+  const files = items.filter((i) => i.kind !== "style");
+  const lines: string[] = [];
+  for (const s of styles.slice(0, 8)) lines.push(`- Style "${s.name}" (kit:${s.id}): ${s.notes}`);
+  for (const f of files.slice(0, 40)) {
+    const label = f.kind === "font" ? `font '${kitFontFamily(f)}'` : `${f.kind} "${f.name}"`;
+    lines.push(`- ${label} (kit:${f.id})${f.notes ? ` — ${f.notes.slice(0, 160)}` : ""}. ${kitUsage(f)}`);
+  }
+  const more = Math.max(0, styles.length - 8) + Math.max(0, files.length - 40);
+  if (more > 0) lines.push(`- …and ${more} more (search_library "my kit").`);
+  return lines.join("\n");
+}
+
 export function turnContext(conversationId: string): string {
   const nowText = new Intl.DateTimeFormat("en-IN", { dateStyle: "full", timeStyle: "short", timeZone: TZ }).format(new Date());
   const assets = (getDb().prepare("SELECT id FROM assets WHERE conversation_id = ? ORDER BY created_at").all(conversationId) as { id: string }[])
@@ -167,6 +202,9 @@ export function turnContext(conversationId: string): string {
     ``,
     `Brand kit:`,
     describeBrandKit(kit),
+    ``,
+    `The user's kit (their own resources: prefer these over library defaults when they fit):`,
+    describeKit(listKit()),
     ``,
     `Files in your studio workspace (open them with the tools):`,
     assets.length ? assets.map(assetLine).join("\n") : "(none yet)",

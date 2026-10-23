@@ -15,7 +15,7 @@ export interface StorageDriver {
   ensureDir(prefix: string): string;
 }
 
-const KEY_PATTERN = /^(uploads|outputs|thumbs|tmp)\/[A-Za-z0-9_.-]+$/;
+const KEY_PATTERN = /^(uploads|outputs|thumbs|tmp|kit)\/[A-Za-z0-9_.-]+$/;
 
 class LocalStorage implements StorageDriver {
   constructor(private root: string) {}
@@ -54,7 +54,7 @@ export async function freeDiskBytes(): Promise<number> {
 export function storageBytesUsed(): number {
   const root = getConfig().dataDir;
   let total = 0;
-  for (const sub of ["uploads", "outputs", "thumbs"]) {
+  for (const sub of ["uploads", "outputs", "thumbs", "kit"]) {
     const dir = path.join(/*turbopackIgnore: true*/ root, sub);
     if (!fs.existsSync(dir)) continue;
     for (const f of fs.readdirSync(dir)) total += fs.statSync(path.join(/*turbopackIgnore: true*/ dir, f)).size;

@@ -25,6 +25,7 @@ Requirements:
 npm install
 npm run setup:speech   # optional: local voice-note transcription (whisper.cpp + ~466 MB model)
 npm run setup:library  # fonts, animated emoji, colour looks, sound effects (~35 MB)
+npm run setup:tracking # optional, macOS: Apple Vision subject tracker for reframing (compiles in seconds)
 npm run dev
 ```
 
@@ -112,6 +113,9 @@ Other features:
 - **Validation:** before a version is saved, the output must exist and match the expected duration (within 3%) and dimensions.
 - **Jobs:** job states persist (queued, validating, planning, editing, rendering, finalizing, completed, failed, cancelled). You can cancel a running job, which kills FFmpeg, and retry failed or cancelled ones. When the worker restarts, it re-queues jobs that were interrupted mid-run.
 - **History:** you can create, rename and delete conversations and search Projects. **Account & usage** shows measured render time, output seconds and storage.
+- **My Kit:** users import their own fonts (TTF/OTF/WOFF), .cube LUTs, logos, images, video elements, sound effects, music and saved styles from the Library panel. Files are checked by content, stored under `data/kit/`, given to the editor read-only as `kit/…`, and preferred over library defaults. Optional credit lines flow into delivery credits. See [docs/ASSET_LIBRARY.md](docs/ASSET_LIBRARY.md).
+- **Voiceover:** ElevenLabs (`eleven_v4`) or Google Chirp 3 HD when a key is set, otherwise the macOS voices, clearly labelled as a draft. `polish_voice` cleans up the user's own recordings (denoise, de-ess, compression, broadcast loudness).
+- **Reframing and B-roll:** `reframe_subject` follows the speaker with Apple Vision face/upper-body detection (macOS) for 9:16 crops and zoomed second angles; `find_shots` splits B-roll into shots with a contact sheet.
 - **Privacy controls:** deleting a conversation also deletes its files, and "Delete all my data" wipes everything.
 
 ## Known limitations
@@ -119,7 +123,8 @@ Other features:
 - **Testing on your own Claude plan isn't for customers.** The `claude-cli` engine uses your personal Claude login and is meant for local testing only. It refuses to run in production. Customers need the Claude API with an API key.
 - **No posting or analytics.** JANUXAI can't post to Instagram, YouTube or WhatsApp, or read account insights, so posting-time advice is general guidance.
 - **No music library.** Claude suggests songs, but you add licensed music in Instagram or YouTube, or upload a track you have the rights to.
-- **Burned-in captions and voiceover aren't available yet.** Text in designs and motion graphics works.
+- **Premium voices need a provider key.** Without `ELEVENLABS_API_KEY` or `GOOGLE_TTS_API_KEY`, voiceovers use the synthetic macOS draft voices. The provider integrations are tested against a local mock of their APIs; check them with a real key before launch.
+- **Subject tracking is macOS-only** and hasn't yet been checked on real faces. Elsewhere `reframe_subject` reports that it's unavailable.
 - **Live trends need web search.** Claude can't see current trends unless the API engine runs with `JANUX_WEB_SEARCH=on`.
 - **Voice-note accuracy** depends on recording quality. The `small` Whisper model is a speed and accuracy trade-off; transcripts are shown so users can check them.
 - **No authentication.** It runs as a single local user and the server binds to `127.0.0.1`. Don't expose it to a network as-is.

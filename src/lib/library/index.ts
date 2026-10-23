@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getConfig } from "../config";
+import { kitFontFamily, kitUsage, listKit, type KitItem } from "../kit";
 import { SFX_TYPES } from "../studio/audioGen";
 import { CAPTION_STYLES } from "./captions";
 import { EMOJIS, emojiFile } from "./emoji";
@@ -113,7 +114,23 @@ export function catalog(): LibraryEntry[] {
       usage: `run_ffmpeg filter: lut3d=lib/looks/${l.id}.cube (mix with the original using blend for a lighter look).`,
     });
   }
-  return out;
+  return [...kitEntries(), ...out];
+}
+
+const KIT_KIND: Record<KitItem["kind"], AssetKind> = { font: "font", lut: "look", logo: "logo", image: "image", overlay: "overlay", sfx: "sfx", music: "music", style: "style" };
+
+/** The user's imported resources, as catalog entries (always listed first). */
+export function kitEntries(): LibraryEntry[] {
+  return listKit().map((i) => ({
+    id: `kit:${i.id}`,
+    kind: KIT_KIND[i.kind],
+    name: i.kind === "font" ? kitFontFamily(i) : i.name,
+    tags: ["my kit", "brand", "own", i.kind],
+    description: `Your ${i.kind === "lut" ? "colour look" : i.kind}${i.notes ? `: ${i.kind === "style" ? i.notes : i.notes.slice(0, 300)}` : "."}`,
+    license: { name: "Provided by you", url: "", commercialUse: true, ...(i.credit ? { attribution: i.credit } : {}) },
+    usage: kitUsage(i),
+    source: "kit" as const,
+  }));
 }
 
 /** Simple keyword search over names, tags and descriptions. */
@@ -129,7 +146,10 @@ export function searchLibrary(query: string, kind?: AssetKind, limit = 12): Libr
         if (e.tags.some((tag) => tag.includes(t))) score += 3;
         if (hay.includes(t)) score += 1;
       }
-      return { e, score: terms.length ? score : 1 };
+      if (!terms.length) score = 1;
+      // Matching items from the user's own kit always come first.
+      if (score > 0 && e.source === "kit") score += 100;
+      return { e, score };
     })
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score);
@@ -156,6 +176,16 @@ export function fontFaceCss(html: string): { css: string; used: string[] } {
       rules.push(`@font-face{font-family:'${f.family}';font-weight:${w};font-display:block;src:url(data:font/ttf;base64,${fs.readFileSync(file).toString("base64")}) format('truetype')}`);
     }
     if (any) used.push(`font:${fontId(f.family)}`);
+  }
+  for (const k of listKit("font")) {
+    const family = kitFontFamily(k);
+    if (!k.file || !html.includes(family)) continue;
+    const file = path.join(getConfig().dataDir, "kit", k.file);
+    if (!fs.existsSync(file)) continue;
+    const fmt = String(k.meta.format ?? "truetype");
+    const mime = fmt === "woff2" ? "font/woff2" : fmt === "woff" ? "font/woff" : fmt === "opentype" ? "font/otf" : "font/ttf";
+    rules.push(`@font-face{font-family:'${family}';font-display:block;src:url(data:${mime};base64,${fs.readFileSync(file).toString("base64")}) format('${fmt}')}`);
+    used.push(`kit:${k.id}`);
   }
   return { css: rules.join("\n"), used };
 }

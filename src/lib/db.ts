@@ -112,6 +112,19 @@ CREATE TABLE IF NOT EXISTS brand_kit (
   updated_at INTEGER NOT NULL
 );
 
+-- My Kit: fonts, LUTs, logos, overlays, sounds and saved styles the user imports.
+CREATE TABLE IF NOT EXISTS kit_items (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  file TEXT,
+  notes TEXT NOT NULL DEFAULT '',
+  credit TEXT,
+  meta TEXT NOT NULL DEFAULT '{}',
+  size INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS agent_runs (
   id TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,

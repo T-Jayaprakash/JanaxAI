@@ -2,6 +2,7 @@
 
 import { Search, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { KitTab } from "./KitTab";
 
 interface Entry {
   id: string;
@@ -18,6 +19,7 @@ interface Entry {
 }
 
 const KINDS: { id: string; label: string }[] = [
+  { id: "kit", label: "My kit" },
   { id: "font", label: "Fonts" },
   { id: "caption_style", label: "Captions" },
   { id: "transition", label: "Transitions" },
@@ -35,6 +37,7 @@ export function LibraryPanel({ onClose, onUse }: { onClose: () => void; onUse: (
   const [data, setData] = useState<{ installed: boolean; counts: Record<string, number>; entries: Entry[] } | null>(null);
 
   useEffect(() => {
+    if (kind === "kit") return;
     const ctrl = new AbortController();
     const t = setTimeout(() => {
       fetch(`/api/library?kind=${kind}&q=${encodeURIComponent(q)}`, { signal: ctrl.signal })
@@ -63,14 +66,14 @@ export function LibraryPanel({ onClose, onUse }: { onClose: () => void; onUse: (
         <header className="flex items-center justify-between border-b border-line px-5 py-4">
           <div>
             <h2 className="text-base font-semibold">Library</h2>
-            <p className="text-xs text-muted">Professional assets the editor uses. Ask for any of them by name.</p>
+            <p className="text-xs text-muted">Your kit and the professional assets the editor uses. Ask for any of them by name.</p>
           </div>
           <button autoFocus onClick={onClose} aria-label="Close" className="grid h-8 w-8 place-items-center rounded-lg text-muted hover:bg-card hover:text-ink">
             <X size={17} />
           </button>
         </header>
         <div className="space-y-3 border-b border-line px-5 py-3">
-          <div className="flex items-center gap-2 rounded-xl border border-line bg-card px-3">
+          <div className={`flex items-center gap-2 rounded-xl border border-line bg-card px-3 ${kind === "kit" ? "hidden" : ""}`}>
             <Search size={15} className="text-faint" />
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search: tamil bold, glitch, sale, warm…" aria-label="Search the library" className="flex-1 bg-transparent py-2.5 text-sm focus:outline-none" />
           </div>
@@ -90,40 +93,46 @@ export function LibraryPanel({ onClose, onUse }: { onClose: () => void; onUse: (
           </div>
         </div>
         <div className="flex-1 overflow-y-auto p-5">
-          {data && !data.installed && (
-            <p className="mb-4 rounded-xl border border-warn/40 bg-warn/10 p-3 text-xs text-warn">The library files aren&apos;t downloaded yet. Run: npm run setup:library</p>
+          {kind === "kit" ? (
+            <KitTab onUse={onUse} />
+          ) : (
+            <>
+              {data && !data.installed && (
+                <p className="mb-4 rounded-xl border border-warn/40 bg-warn/10 p-3 text-xs text-warn">The library files aren&apos;t downloaded yet. Run: npm run setup:library</p>
+              )}
+              <ul className="grid gap-3 sm:grid-cols-2">
+                {(data?.entries ?? []).map((e) => (
+                  <li key={e.id} className="flex flex-col rounded-xl border border-line bg-card p-4">
+                    {e.preview.type === "font" && (
+                      <p className="mb-2 truncate text-2xl" style={{ fontFamily: `'lib-${e.preview.family}'`, fontWeight: e.preview.weight }}>
+                        {e.preview.tamil ? "வணக்கம் Trichy" : "Just tell it."}
+                      </p>
+                    )}
+                    {e.preview.type === "caption" && (
+                      <p className="mb-2 rounded-lg bg-[#2a2f3a] px-3 py-3 text-center text-lg" style={{ fontWeight: e.preview.weight, textTransform: e.preview.uppercase ? "uppercase" : "none" }}>
+                        <span style={{ color: e.preview.color === "transparent" ? "#fff" : e.preview.color, WebkitTextStroke: "1px #000" }}>make it </span>
+                        <span style={{ color: e.preview.activeColor, background: e.preview.box ?? undefined, borderRadius: 6, padding: e.preview.box ? "0 6px" : 0, WebkitTextStroke: "1px #000" }}>viral</span>
+                      </p>
+                    )}
+                    {e.preview.type === "emoji" && <p className="mb-1 text-4xl">{e.preview.char}</p>}
+                    <p className="text-sm font-medium">{e.name}</p>
+                    <p className="mt-1 line-clamp-2 text-xs text-muted">{e.description}</p>
+                    <div className="mt-auto flex items-center gap-2 pt-3">
+                      <span className="truncate text-[10px] text-faint" title={e.license}>
+                        {e.license}
+                      </span>
+                      <button
+                        onClick={() => onUse(`Use the ${e.name} ${KINDS.find((k) => k.id === e.kind)?.label.replace(/s$/, "").toLowerCase() ?? "asset"} (${e.id}) in my video.`)}
+                        className="ml-auto shrink-0 rounded-full border border-line px-2.5 py-1 text-[11px] text-muted hover:border-line-strong hover:text-ink"
+                      >
+                        Use
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </>
           )}
-          <ul className="grid gap-3 sm:grid-cols-2">
-            {(data?.entries ?? []).map((e) => (
-              <li key={e.id} className="flex flex-col rounded-xl border border-line bg-card p-4">
-                {e.preview.type === "font" && (
-                  <p className="mb-2 truncate text-2xl" style={{ fontFamily: `'lib-${e.preview.family}'`, fontWeight: e.preview.weight }}>
-                    {e.preview.tamil ? "வணக்கம் Trichy" : "Just tell it."}
-                  </p>
-                )}
-                {e.preview.type === "caption" && (
-                  <p className="mb-2 rounded-lg bg-[#2a2f3a] px-3 py-3 text-center text-lg" style={{ fontWeight: e.preview.weight, textTransform: e.preview.uppercase ? "uppercase" : "none" }}>
-                    <span style={{ color: e.preview.color === "transparent" ? "#fff" : e.preview.color, WebkitTextStroke: "1px #000" }}>make it </span>
-                    <span style={{ color: e.preview.activeColor, background: e.preview.box ?? undefined, borderRadius: 6, padding: e.preview.box ? "0 6px" : 0, WebkitTextStroke: "1px #000" }}>viral</span>
-                  </p>
-                )}
-                {e.preview.type === "emoji" && <p className="mb-1 text-4xl">{e.preview.char}</p>}
-                <p className="text-sm font-medium">{e.name}</p>
-                <p className="mt-1 line-clamp-2 text-xs text-muted">{e.description}</p>
-                <div className="mt-auto flex items-center gap-2 pt-3">
-                  <span className="truncate text-[10px] text-faint" title={e.license}>
-                    {e.license}
-                  </span>
-                  <button
-                    onClick={() => onUse(`Use the ${e.name} ${KINDS.find((k) => k.id === e.kind)?.label.replace(/s$/, "").toLowerCase() ?? "asset"} (${e.id}) in my video.`)}
-                    className="ml-auto shrink-0 rounded-full border border-line px-2.5 py-1 text-[11px] text-muted hover:border-line-strong hover:text-ink"
-                  >
-                    Use
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
         </div>
       </div>
     </div>

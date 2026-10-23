@@ -14,8 +14,10 @@ export async function GET(req: Request) {
   const q = (url.searchParams.get("q") ?? "").slice(0, 100);
   const kindParam = url.searchParams.get("kind") as AssetKind | null;
   const kind = kindParam && KINDS.includes(kindParam) ? kindParam : undefined;
-  const entries = q ? searchLibrary(q, kind, 120) : catalog().filter((e) => !kind || e.kind === kind);
-  const counts = Object.fromEntries(KINDS.map((k) => [k, catalog().filter((e) => e.kind === k).length]));
+  // My Kit has its own tab (/api/kit); this lists the shared library only.
+  const shared = catalog().filter((e) => e.source !== "kit");
+  const entries = q ? searchLibrary(q, kind, 160).filter((e) => e.source !== "kit") : shared.filter((e) => !kind || e.kind === kind);
+  const counts = Object.fromEntries(KINDS.map((k) => [k, shared.filter((e) => e.kind === k).length]));
   return Response.json({
     installed: libraryInstalled(),
     counts,

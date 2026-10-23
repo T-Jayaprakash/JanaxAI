@@ -18,7 +18,7 @@ export interface AppStatus {
   worker: { alive: boolean };
   planner: { label: string; usesAI: boolean };
   assistant: { id: string; label: string; devOnly: boolean } | null;
-  capabilities: { designs: boolean; voiceNotes: boolean };
+  capabilities: { designs: boolean; voiceNotes: boolean; voiceover: { label: string; premium: boolean } | null };
   limits: { maxUploadMB: number; maxFilesPerMessage: number; maxClipSeconds: number; maxOutputSeconds: number };
   usage: { renders: number; succeeded: number; failed: number; renderSeconds: number; outputSeconds: number; inputBytes: number; outputBytes: number };
   storage: { usedBytes: number; freeBytes: number };
@@ -126,5 +126,45 @@ export function formatBytes(n: number): string {
   if (n < 1073741824) return `${(n / 1048576).toFixed(1)} MB`;
   return `${(n / 1073741824).toFixed(1)} GB`;
 }
+
+export type KitKind = "font" | "lut" | "logo" | "image" | "overlay" | "sfx" | "music" | "style";
+
+export interface KitItemView {
+  id: string;
+  kind: KitKind;
+  name: string;
+  notes: string;
+  credit: string | null;
+  size: number;
+  createdAt: number;
+  hasFile: boolean;
+  family?: string;
+  meta: { width?: number; height?: number; duration?: number; alpha?: boolean; lutSize?: number };
+}
+
+export const kitApi = {
+  list: () => call<{ items: KitItemView[] }>("/api/kit"),
+  saveStyle: (name: string, notes: string) => call<{ item: KitItemView }>("/api/kit/style", { method: "POST", body: JSON.stringify({ name, notes }) }),
+  remove: (id: string) => call(`/api/kit/${id}`, { method: "DELETE" }),
+  upload(file: File, opts: { kind: Exclude<KitKind, "style">; name: string; notes: string; credit: string }, onProgress: (f: number) => void): Promise<KitItemView> {
+    const params = new URLSearchParams({ kind: opts.kind, fileName: file.name, name: opts.name, notes: opts.notes, credit: opts.credit, rights: "1" });
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `/api/kit?${params}`);
+      xhr.setRequestHeader("Content-Type", "application/octet-stream");
+      xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
+      xhr.onload = () => {
+        let body: { item?: KitItemView; error?: string } = {};
+        try {
+          body = JSON.parse(xhr.responseText);
+        } catch {}
+        if (xhr.status >= 200 && xhr.status < 300 && body.item) resolve(body.item);
+        else reject(new ApiError(xhr.status, body.error ?? "Upload failed."));
+      };
+      xhr.onerror = () => reject(new ApiError(0, "Network error during upload."));
+      xhr.send(file);
+    });
+  },
+};
 
 export const deleteUnsentUpload = (id: string) => fetch(`/api/assets/${id}`, { method: "DELETE" }).catch(() => undefined);

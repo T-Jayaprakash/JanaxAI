@@ -7,7 +7,8 @@ export interface License {
   commercialUse: boolean;
 }
 
-export type AssetKind = "font" | "transition" | "caption_style" | "sticker" | "emoji" | "sfx" | "meme_format" | "look";
+export const ASSET_KINDS = ["font", "transition", "caption_style", "sticker", "emoji", "sfx", "meme_format", "look", "logo", "image", "overlay", "music", "style"] as const;
+export type AssetKind = (typeof ASSET_KINDS)[number];
 
 export interface LibraryEntry {
   id: string;
@@ -18,6 +19,8 @@ export interface LibraryEntry {
   license: License;
   /** How the editor uses it (shown to Claude in search results). */
   usage: string;
+  /** "kit" = imported by the user (My Kit). */
+  source?: "library" | "kit";
 }
 
 export const LICENSES = {

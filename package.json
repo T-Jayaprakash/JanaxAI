@@ -12,6 +12,7 @@
     "test": "tsx --test --test-concurrency=1 tests/*.test.ts",
     "typecheck": "tsc --noEmit",
     "setup:speech": "bash scripts/setup-speech.sh",
+    "setup:tracking": "tsx scripts/setup-tracking.ts",
     "setup:library": "tsx scripts/setup-library.ts"
   },
   "dependencies": {

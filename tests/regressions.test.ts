@@ -22,7 +22,7 @@ function browserStyleWebm(dir: string, src: string): string {
 describe("browser recordings without a stored duration", () => {
   let dir: string;
   let webm: string;
-  before(() => {
+  before(async () => {
     dir = useTempDataDir();
     webm = browserStyleWebm(dir, fixtures().landscapeWithAudio);
   });
@@ -55,17 +55,17 @@ describe("browser recordings without a stored duration", () => {
 describe("assistant replies", () => {
   before(() => useTempDataDir());
 
-  it("runs one reply at a time per conversation", () => {
-    const a = createConversation().id;
-    const b = createConversation().id;
-    const m = (c: string) => addMessage({ conversationId: c, role: "assistant", text: "", attachments: [], jobId: null, versionId: null }).id;
-    const first = queueAgentRun(a, m(a), "test");
-    const followUp = queueAgentRun(a, m(a), "test");
-    const other = queueAgentRun(b, m(b), "test");
-    assert.equal(claimNextAgentRun()?.id, first.id);
+  it("runs one reply at a time per conversation", async () => {
+    const a = (await createConversation()).id;
+    const b = (await createConversation()).id;
+    const m = async (c: string) => (await addMessage({ conversationId: c, role: "assistant", text: "", attachments: [], jobId: null, versionId: null })).id;
+    const first = await queueAgentRun(a, await m(a), "test");
+    const followUp = await queueAgentRun(a, await m(a), "test");
+    const other = await queueAgentRun(b, await m(b), "test");
+    assert.equal((await claimNextAgentRun())?.id, first.id);
     // The follow-up in the same conversation waits; another conversation can run.
-    assert.equal(claimNextAgentRun()?.id, other.id);
-    assert.equal(claimNextAgentRun(), null);
+    assert.equal((await claimNextAgentRun())?.id, other.id);
+    assert.equal(await claimNextAgentRun(), null);
     assert.ok(followUp.id);
   });
 });

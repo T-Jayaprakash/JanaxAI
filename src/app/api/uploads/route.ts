@@ -13,7 +13,7 @@ export async function POST(req: Request) {
   const name = url.searchParams.get("name") ?? "";
   const conversationId = url.searchParams.get("conversationId");
   if (!name) return jsonError(400, "Missing file name.");
-  if (conversationId && !getConversation(conversationId)) return jsonError(404, "Conversation not found.");
+  if (conversationId && !await getConversation(conversationId)) return jsonError(404, "Conversation not found.");
   if (!req.body) return jsonError(400, "Empty upload.");
   const declared = Number(req.headers.get("content-length")) || undefined;
   try {

@@ -87,13 +87,18 @@ export function toPublicAsset(a: Asset): PublicAsset {
   };
 }
 
-export function getAsset(id: string): Asset | null {
-  const r = getDb().prepare("SELECT * FROM assets WHERE id = ?").get(id) as Row | undefined;
+export async function getAsset(id: string): Promise<Asset | null> {
+  const r = await getDb().get<Row>("SELECT * FROM assets WHERE id = ?", [id]);
   return r ? fromRow(r) : null;
 }
 
-export function getAssets(ids: string[]): Asset[] {
-  return ids.map(getAsset).filter((a): a is Asset => !!a);
+/** The assets that exist, in the order of `ids`. */
+export async function getAssets(ids: string[]): Promise<Asset[]> {
+  if (!ids.length) return [];
+  const unique = [...new Set(ids)];
+  const rows = await getDb().all<Row>(`SELECT * FROM assets WHERE id IN (${unique.map(() => "?").join(",")})`, unique);
+  const byId = new Map(rows.map((r) => [r.id as string, fromRow(r)]));
+  return ids.map((id) => byId.get(id)).filter((a): a is Asset => !!a);
 }
 
 /** Strips directories and control characters; keeps the name for display only. */
@@ -192,7 +197,7 @@ export async function ingestUpload(input: {
       metadata: info,
       createdAt: now(),
     };
-    insertAsset(asset);
+    await insertAsset(asset);
     return asset;
 
     async function finishAudio(probed: typeof info): Promise<Asset> {
@@ -211,7 +216,7 @@ export async function ingestUpload(input: {
         thumbKey: null, mime: input.mime || "application/octet-stream", size, duration: probed.duration, width: null, height: null,
         hasAudio: true, metadata, createdAt: now(),
       };
-      insertAsset(asset);
+      await insertAsset(asset);
       return asset;
     }
   } catch (err) {
@@ -226,22 +231,17 @@ export async function ingestUpload(input: {
   }
 }
 
-export function insertAsset(a: Asset) {
-  getDb()
-    .prepare(
-      `INSERT INTO assets (id, conversation_id, kind, media_type, original_name, storage_key, thumb_key, mime, size,
-        duration, width, height, has_audio, metadata, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      a.id, a.conversationId, a.kind, a.mediaType, a.originalName, a.storageKey, a.thumbKey, a.mime, a.size,
-      a.duration, a.width, a.height, a.hasAudio ? 1 : 0, JSON.stringify(a.metadata), a.createdAt,
-    );
+export async function insertAsset(a: Asset) {
+  await getDb().run(
+    `INSERT INTO assets (id, conversation_id, kind, media_type, original_name, storage_key, thumb_key, mime, size,
+      duration, width, height, has_audio, metadata, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [a.id, a.conversationId, a.kind, a.mediaType, a.originalName, a.storageKey, a.thumbKey, a.mime, a.size, a.duration, a.width, a.height, a.hasAudio ? 1 : 0, JSON.stringify(a.metadata), a.createdAt],
+  );
 }
 
-export function attachAssetsToConversation(ids: string[], conversationId: string) {
-  const stmt = getDb().prepare("UPDATE assets SET conversation_id = ? WHERE id = ? AND (conversation_id IS NULL OR conversation_id = ?)");
-  for (const id of ids) stmt.run(conversationId, id, conversationId);
+export async function attachAssetsToConversation(ids: string[], conversationId: string) {
+  for (const id of ids) await getDb().run("UPDATE assets SET conversation_id = ? WHERE id = ? AND (conversation_id IS NULL OR conversation_id = ?)", [conversationId, id, conversationId]);
 }
 
 export function deleteAssetFiles(a: Asset) {

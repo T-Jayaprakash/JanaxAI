@@ -8,7 +8,7 @@ import { resolveInWorkspace } from "@/lib/studio/workspace";
 export async function GET(req: Request, ctx: RouteContext<"/api/conversations/[id]/workspace">) {
   await dynamic();
   const { id } = await ctx.params;
-  if (!getConversation(id)) return jsonError(404, "Conversation not found.");
+  if (!await getConversation(id)) return jsonError(404, "Conversation not found.");
   const rel = new URL(req.url).searchParams.get("path") ?? "";
   if (!/^cache\/[A-Za-z0-9._-]+\.(jpe?g|png)$/.test(rel)) return jsonError(400, "Only preview images can be opened.");
   let file: string;

@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { getAsset } from "../assets";
+import { getAssets } from "../assets";
 import { getStorage } from "../storage";
 
 const MAX_INLINE_BYTES = 8 * 1024 * 1024;
@@ -9,9 +9,11 @@ const MAX_INLINE_BYTES = 8 * 1024 * 1024;
  * as janux-asset://<id>. Rendering swaps those for data URIs so the page
  * never needs network or file access. Unknown ids become transparent.
  */
-export function resolveAssetRefs(html: string): string {
+export async function resolveAssetRefs(html: string): Promise<string> {
+  const ids = [...new Set([...html.matchAll(/janux-asset:\/\/(ast_[a-f0-9]{32})/g)].map((m) => m[1]))];
+  const assets = new Map((await getAssets(ids)).map((a) => [a.id, a]));
   return html.replace(/janux-asset:\/\/(ast_[a-f0-9]{32})(\/thumb)?/g, (_m, id: string, thumb?: string) => {
-    const a = getAsset(id);
+    const a = assets.get(id);
     const storage = getStorage();
     const key = a ? (thumb || a.mediaType === "video" ? a.thumbKey : a.mediaType === "image" ? a.storageKey : null) : null;
     if (!key || !storage.exists(key)) return TRANSPARENT;

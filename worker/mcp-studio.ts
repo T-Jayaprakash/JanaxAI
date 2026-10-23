@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { watchCancel } from "../src/lib/cancel";
 import { getDb } from "../src/lib/db";
 import { closeBrowser } from "../src/lib/graphics/render";
 import { runStudioTool, STUDIO_TOOLS } from "../src/lib/studio/tools";
@@ -15,16 +16,18 @@ const conversationId = process.env.JANUX_CONVERSATION_ID ?? "";
 const messageId = process.env.JANUX_MESSAGE_ID ?? "";
 const runId = process.env.JANUX_RUN_ID ?? "";
 
-function shouldCancel() {
-  const r = getDb().prepare("SELECT state FROM agent_runs WHERE id = ?").get(runId) as { state: string } | undefined;
-  // Stop working as soon as the reply is no longer active (stopped, failed or interrupted).
+// Stop working as soon as the reply is no longer active (stopped, failed or interrupted).
+const cancel = watchCancel(async () => {
+  const r = await getDb().get<{ state: string }>("SELECT state FROM agent_runs WHERE id = ?", [runId]);
   return !r || r.state !== "running";
-}
+});
+const shouldCancel = cancel.shouldCancel;
 
 const server = new McpServer({ name: "janux-studio", version: "1.0.0" });
 
 for (const t of STUDIO_TOOLS) {
   server.registerTool(t.name, { description: t.description, inputSchema: t.schema as never }, (async (input: unknown) => {
+    await cancel.refresh();
     const out = await runStudioTool(t.name, input, { conversationId, messageId, runId, shouldCancel });
     const content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[] = [{ type: "text", text: out.text }];
     for (const img of (out.images ?? []).slice(0, 8)) {

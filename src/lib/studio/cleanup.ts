@@ -43,15 +43,15 @@ export async function sweepWorkspaces(opts: { idleHours?: number } = {}): Promis
   // When the disk is nearly full, anything idle for an hour goes.
   const idleMs = (lowDisk ? 1 : (opts.idleHours ?? Number(process.env.JANUX_WORKSPACE_IDLE_HOURS ?? 24))) * 3600_000;
   const db = getDb();
-  const busy = new Set((db.prepare("SELECT DISTINCT conversation_id AS id FROM agent_runs WHERE state IN ('queued','running')").all() as { id: string }[]).map((r) => r.id));
-  const exists = db.prepare("SELECT 1 FROM conversations WHERE id = ?");
+  const busy = new Set((await db.all<{ id: string }>("SELECT DISTINCT conversation_id AS id FROM agent_runs WHERE state IN ('queued','running')")).map((r) => r.id));
+  const known = new Set((await db.all<{ id: string }>("SELECT id FROM conversations")).map((r) => r.id));
   let freed = 0;
   let swept = 0;
   for (const id of fs.readdirSync(root)) {
     const dir = path.join(root, id);
     if (!/^cnv_[a-z0-9]+$/.test(id) || !fs.lstatSync(dir).isDirectory() || busy.has(id)) continue;
     try {
-      if (!exists.get(id)) {
+      if (!known.has(id)) {
         // The conversation was deleted: the whole workspace goes.
         freed += dirSize(dir);
         fs.rmSync(dir, { recursive: true, force: true });

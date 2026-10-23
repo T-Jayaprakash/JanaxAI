@@ -20,8 +20,16 @@ export function libraryInstalled(): boolean {
   return fs.existsSync(path.join(libraryDir(), "installed.json"));
 }
 
-/** The full searchable catalog, built from the asset modules. */
-export function catalog(): LibraryEntry[] {
+let builtIn: LibraryEntry[] | null = null;
+
+/** The full searchable catalog: the user's kit first, then the built-in library. */
+export async function catalog(): Promise<LibraryEntry[]> {
+  return [...(await kitEntries()), ...builtInCatalog()];
+}
+
+/** The built-in library, built once from the asset modules. */
+export function builtInCatalog(): LibraryEntry[] {
+  if (builtIn) return builtIn;
   const out: LibraryEntry[] = [];
   for (const f of FONTS) {
     out.push({
@@ -114,14 +122,15 @@ export function catalog(): LibraryEntry[] {
       usage: `run_ffmpeg filter: lut3d=lib/looks/${l.id}.cube (mix with the original using blend for a lighter look).`,
     });
   }
-  return [...kitEntries(), ...out];
+  builtIn = out;
+  return out;
 }
 
 const KIT_KIND: Record<KitItem["kind"], AssetKind> = { font: "font", lut: "look", logo: "logo", image: "image", overlay: "overlay", sfx: "sfx", music: "music", style: "style" };
 
 /** The user's imported resources, as catalog entries (always listed first). */
-export function kitEntries(): LibraryEntry[] {
-  return listKit().map((i) => ({
+export async function kitEntries(): Promise<LibraryEntry[]> {
+  return (await listKit()).map((i) => ({
     id: `kit:${i.id}`,
     kind: KIT_KIND[i.kind],
     name: i.kind === "font" ? kitFontFamily(i) : i.name,
@@ -134,9 +143,9 @@ export function kitEntries(): LibraryEntry[] {
 }
 
 /** Simple keyword search over names, tags and descriptions. */
-export function searchLibrary(query: string, kind?: AssetKind, limit = 12): LibraryEntry[] {
+export async function searchLibrary(query: string, kind?: AssetKind, limit = 12): Promise<LibraryEntry[]> {
   const terms = query.toLowerCase().split(/[\s,]+/).filter(Boolean);
-  const scored = catalog()
+  const scored = (await catalog())
     .filter((e) => !kind || e.kind === kind)
     .map((e) => {
       const hay = `${e.name} ${e.tags.join(" ")} ${e.description}`.toLowerCase();
@@ -156,14 +165,14 @@ export function searchLibrary(query: string, kind?: AssetKind, limit = 12): Libr
   return scored.slice(0, limit).map((x) => x.e);
 }
 
-export function findEntry(id: string): LibraryEntry | undefined {
-  return catalog().find((e) => e.id === id);
+export async function findEntry(id: string): Promise<LibraryEntry | undefined> {
+  return id.startsWith("kit:") ? (await kitEntries()).find((e) => e.id === id) : builtInCatalog().find((e) => e.id === id);
 }
 
 // ---- Rendering helpers -------------------------------------------------
 
 /** @font-face rules (data URIs) for every library family mentioned in the HTML. */
-export function fontFaceCss(html: string): { css: string; used: string[] } {
+export async function fontFaceCss(html: string): Promise<{ css: string; used: string[] }> {
   const used: string[] = [];
   const rules: string[] = [];
   for (const f of FONTS) {
@@ -177,7 +186,7 @@ export function fontFaceCss(html: string): { css: string; used: string[] } {
     }
     if (any) used.push(`font:${fontId(f.family)}`);
   }
-  for (const k of listKit("font")) {
+  for (const k of await listKit("font")) {
     const family = kitFontFamily(k);
     if (!k.file || !html.includes(family)) continue;
     const file = path.join(getConfig().dataDir, "kit", k.file);
@@ -228,11 +237,11 @@ el.style.opacity=t<el.__start?'0':'1';a.goToAndStop(Math.min(total-1,(local*fr)%
 }
 
 /** Licence credits for a list of used asset ids (deduplicated). */
-export function creditsFor(ids: string[]): { id: string; license: License }[] {
+export async function creditsFor(ids: string[]): Promise<{ id: string; license: License }[]> {
   const seen = new Set<string>();
   const out: { id: string; license: License }[] = [];
   for (const id of ids) {
-    const entry = findEntry(id);
+    const entry = await findEntry(id);
     if (!entry?.license.attribution || seen.has(entry.license.attribution)) continue;
     seen.add(entry.license.attribution);
     out.push({ id, license: entry.license });

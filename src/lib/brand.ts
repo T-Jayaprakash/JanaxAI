@@ -20,24 +20,27 @@ export const BrandKitSchema = z.object({
 });
 export type BrandKit = z.infer<typeof BrandKitSchema>;
 
-export function getBrandKit(): BrandKit {
-  const row = getDb().prepare("SELECT data FROM brand_kit WHERE id = 1").get() as { data: string } | undefined;
+export async function getBrandKit(): Promise<BrandKit> {
+  const row = await getDb().get<{ data: string }>("SELECT data FROM brand_kit WHERE id = 1");
   const parsed = BrandKitSchema.safeParse(parseJson(row?.data, {}));
   const kit = parsed.success ? parsed.data : BrandKitSchema.parse({});
-  if (kit.logoAssetId && !getAsset(kit.logoAssetId)) kit.logoAssetId = null;
+  if (kit.logoAssetId && !(await getAsset(kit.logoAssetId))) kit.logoAssetId = null;
   return kit;
 }
 
-export function updateBrandKit(patch: Partial<BrandKit>): BrandKit {
-  const next = BrandKitSchema.parse({ ...getBrandKit(), ...patch });
-  getDb()
-    .prepare("INSERT INTO brand_kit (id, data, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at")
-    .run(JSON.stringify(next), now());
+export async function updateBrandKit(patch: Partial<BrandKit>): Promise<BrandKit> {
+  const next = BrandKitSchema.parse({ ...(await getBrandKit()), ...patch });
+  await getDb().run(
+    "INSERT INTO brand_kit (id, data, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
+    [JSON.stringify(next), now()],
+  );
   return next;
 }
 
 /** Human-readable summary for prompts; empty fields are omitted. */
-export function describeBrandKit(kit: BrandKit): string {
+export async function describeBrandKit(kit: BrandKit): Promise<string> {
+  const logo = kit.logoAssetId ? await getAsset(kit.logoAssetId) : null;
+  const logoExt = logo?.storageKey.match(/\.[a-z0-9]+$/)?.[0] ?? "";
   const rows: [string, string][] = [
     ["Business name", kit.businessName],
     ["Tagline", kit.tagline],
@@ -49,7 +52,7 @@ export function describeBrandKit(kit: BrandKit): string {
     ["Address", kit.address],
     ["Primary color", kit.primaryColor],
     ["Secondary color", kit.secondaryColor],
-    ["Logo", kit.logoAssetId ? `uploaded (in/${kit.logoAssetId}${(getAsset(kit.logoAssetId)?.storageKey.match(/\.[a-z0-9]+$/) ?? [""])[0]} in the workspace)` : ""],
+    ["Logo", kit.logoAssetId ? `uploaded (in/${kit.logoAssetId}${logoExt} in the workspace)` : ""],
     ["Notes", kit.notes],
   ];
   const filled = rows.filter(([, v]) => v);

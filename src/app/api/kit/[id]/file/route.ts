@@ -14,7 +14,7 @@ const MIME: Record<string, string> = {
 export async function GET(req: Request, ctx: RouteContext<"/api/kit/[id]/file">) {
   await dynamic();
   const { id } = await ctx.params;
-  const item = /^kit_[a-f0-9]{32}$/.test(id) ? getKitItem(id) : null;
+  const item = /^kit_[a-f0-9]{32}$/.test(id) ? await getKitItem(id) : null;
   const storage = getStorage();
   if (!item?.file || !storage.exists(`kit/${item.file}`)) return jsonError(404, "File not found.");
   const ext = item.file.split(".").pop() ?? "";

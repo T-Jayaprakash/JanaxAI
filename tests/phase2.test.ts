@@ -19,7 +19,7 @@ function evalExpr(expr: string, t: number): number {
 const face = (x: number, y = 0.3, w = 0.1, c = 0.9) => ({ x, y, w, h: w * 1.4, c });
 
 describe("subject following", () => {
-  it("ignores small jitter, follows real moves and holds through missed frames", () => {
+  it("ignores small jitter, follows real moves and holds through missed frames", async () => {
     const track: TrackResult = {
       width: 1920,
       height: 1080,
@@ -43,7 +43,7 @@ describe("subject following", () => {
     assert.ok(Math.abs(keys.at(-1)!.cx - 0.65) < 0.01, "keeps moving until the subject is centred");
   });
 
-  it("sticks with the current speaker when a second person appears", () => {
+  it("sticks with the current speaker when a second person appears", async () => {
     const track: TrackResult = {
       width: 1920,
       height: 1080,
@@ -58,7 +58,7 @@ describe("subject following", () => {
     assert.ok(keys.every((k) => k.cx < 0.3));
   });
 
-  it("builds a crop window that stays inside the frame and passes through the keys", () => {
+  it("builds a crop window that stays inside the frame and passes through the keys", async () => {
     const track: TrackResult = { width: 1920, height: 1080, duration: 3, samples: [] };
     const keys = [
       { t: 0, cx: 0.05, cy: 0.4, found: true },
@@ -76,7 +76,7 @@ describe("subject following", () => {
     assert.ok(evalExpr(tight.y, 1) >= 0 && evalExpr(tight.y, 1) <= 1080 - 720);
   });
 
-  it("writes flat expressions FFmpeg can parse quickly", () => {
+  it("writes flat expressions FFmpeg can parse quickly", async () => {
     const e = linearExpr([
       { t: 0, v: 10 },
       { t: 1, v: 10.2 },
@@ -94,8 +94,8 @@ describe("phase 2 studio tools", () => {
 
   before(async () => {
     useTempDataDir();
-    const conversationId = createConversation().id;
-    const msg = addMessage({ conversationId, role: "assistant", text: "", attachments: [], jobId: null, versionId: null });
+    const conversationId = (await createConversation()).id;
+    const msg = await addMessage({ conversationId, role: "assistant", text: "", attachments: [], jobId: null, versionId: null });
     ctx = { conversationId, messageId: msg.id, runId: "run_test", shouldCancel: () => false };
     const fx = fixtures();
     const a = await ingestUpload({ body: fileChunks(fx.landscapeWithAudio), originalName: "talk.mp4", mime: "video/mp4", conversationId });

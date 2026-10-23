@@ -19,19 +19,19 @@ function seed(id: string, ageHours: number) {
 }
 
 describe("workspace sweep", () => {
-  before(() => {
+  before(async () => {
     useTempDataDir();
     process.env.JANUX_MIN_FREE_DISK_MB = "1";
   });
 
   it("clears intermediates of idle conversations but keeps transcripts and busy ones", async () => {
-    const idle = createConversation().id;
-    const fresh = createConversation().id;
-    const busy = createConversation().id;
+    const idle = (await createConversation()).id;
+    const fresh = (await createConversation()).id;
+    const busy = (await createConversation()).id;
     const idleDir = seed(idle, 48);
     const freshDir = seed(fresh, 1);
     const busyDir = seed(busy, 48);
-    queueAgentRun(busy, "msg_x", "rules");
+    await queueAgentRun(busy, "msg_x", "rules");
     const orphanDir = seed("cnv_" + "0".repeat(32), 1);
 
     const r = await sweepWorkspaces({ idleHours: 24 });

@@ -4,6 +4,7 @@ import { getAssets, insertAsset, type Asset } from "../assets";
 import { getConfig } from "../config";
 import { insertVersion, setMessageVersion, touchConversation } from "../conversations";
 import { getDb, newId, now } from "../db";
+import { watchCancel } from "../cancel";
 import { getJob, isCancelRequested, PIPELINE, updateJob, type Job, type JobError, type Stage } from "../jobs";
 import { CancelledError, ffmpeg, MediaError } from "../media/ffmpeg";
 import { makeThumbnail, probe } from "../media/probe";
@@ -20,7 +21,7 @@ import { processMotionJob } from "./motion";
 export async function processJob(jobId: string): Promise<void> {
   const cfg = getConfig();
   const storage = getStorage();
-  const initial = getJob(jobId);
+  const initial = await getJob(jobId);
   if (!initial) return;
   if (initial.kind === "motion") return processMotionJob(jobId);
   let stages: Stage[] = initial.stages;
@@ -30,10 +31,15 @@ export async function processJob(jobId: string): Promise<void> {
   let lastWrite = 0;
   let inputBytes = 0;
 
+  // Saves are chained so a slow progress write can never land after a newer state.
+  let writes: Promise<unknown> = Promise.resolve();
   const save = (patch: Parameters<typeof updateJob>[1] = {}) => {
-    updateJob(jobId, { stages, heartbeatAt: now(), ...patch });
+    const next = { stages, heartbeatAt: now(), ...patch };
+    writes = writes.then(() => updateJob(jobId, next)).catch((err) => console.error("[worker] couldn't save job progress", err));
     lastWrite = Date.now();
+    return writes;
   };
+  const cancel = watchCancel(() => isCancelRequested(jobId));
   const setStage = (id: string, patch: Partial<Stage>, jobPatch: Parameters<typeof updateJob>[1] = {}) => {
     stages = stages.map((s) => (s.id === id ? { ...s, ...patch } : s));
     save(jobPatch);
@@ -50,16 +56,16 @@ export async function processJob(jobId: string): Promise<void> {
     if (Date.now() - lastWrite > 400) save();
   };
   const checkCancel = () => {
-    if (isCancelRequested(jobId)) throw new CancelledError();
+    if (cancel.shouldCancel()) throw new CancelledError();
   };
-  const shouldCancel = () => isCancelRequested(jobId);
+  const shouldCancel = cancel.shouldCancel;
 
   try {
     // 1. Inspect inputs again — files may have been removed since upload.
     start("inspect");
     const spec = validateSpec(initial.spec);
     const uniqueIds = [...new Set([...spec.clips.map((c) => c.assetId), ...(spec.music ? [spec.music.assetId] : [])])];
-    const assets = getAssets(uniqueIds);
+    const assets = await getAssets(uniqueIds);
     if (assets.length !== uniqueIds.length) {
       throw new MediaError("Some of the clips for this edit were deleted. Upload them again and retry.", "missing asset row", "missing_input");
     }
@@ -180,7 +186,7 @@ export async function processJob(jobId: string): Promise<void> {
     const thumbKey = `thumbs/${assetId}.jpg`;
     fs.renameSync(outFile, storage.absolutePath(outKey));
     await makeThumbnail(storage.absolutePath(outKey), storage.absolutePath(thumbKey), outInfo.duration);
-    const job = getJob(jobId);
+    const job = await getJob(jobId);
     if (!job) throw new CancelledError(); // conversation deleted mid-render
     const outputSize = storage.size(outKey);
     const outputAsset: Asset = {
@@ -200,8 +206,8 @@ export async function processJob(jobId: string): Promise<void> {
       metadata: outInfo,
       createdAt: now(),
     };
-    insertAsset(outputAsset);
-    const version = insertVersion({
+    await insertAsset(outputAsset);
+    const version = await insertVersion({
       conversationId: job.conversationId,
       jobId: job.id,
       parentVersionId: job.parentVersionId,
@@ -211,18 +217,18 @@ export async function processJob(jobId: string): Promise<void> {
       width: outInfo.width!,
       height: outInfo.height!,
     });
-    setMessageVersion(job.id, version.id);
+    await setMessageVersion(job.id, version.id);
     finish("preview", `Version ${version.number} saved`);
-    updateJob(jobId, { state: "completed", outputVersionId: version.id, finishedAt: now(), stages });
-    touchConversation(job.conversationId);
-    recordUsage(job, { renderMs: Date.now() - startedMs, inputBytes, outputBytes: outputSize, outputSeconds: outInfo.duration, succeeded: true });
+    await save({ state: "completed", outputVersionId: version.id, finishedAt: now(), stages });
+    await touchConversation(job.conversationId);
+    await recordUsage(job, { renderMs: Date.now() - startedMs, inputBytes, outputBytes: outputSize, outputSeconds: outInfo.duration, succeeded: true });
   } catch (err) {
-    const job = getJob(jobId);
+    const job = await getJob(jobId);
     if (!job) return;
     const active = stages.find((s) => s.status === "active");
     if (err instanceof CancelledError) {
       stages = stages.map((s) => (s.status === "active" || s.status === "pending" ? { ...s, status: "skipped", progress: undefined } : s));
-      updateJob(jobId, { state: "cancelled", stages, finishedAt: now() });
+      await save({ state: "cancelled", stages, finishedAt: now() });
       return;
     }
     const error: JobError =
@@ -232,22 +238,23 @@ export async function processJob(jobId: string): Promise<void> {
     stages = stages.map((s) =>
       s === active ? { ...s, status: "failed", detail: error.message, progress: undefined, finishedAt: now() } : s.status === "pending" ? { ...s, status: "skipped" } : s,
     );
-    updateJob(jobId, { state: "failed", stages, error, finishedAt: now() });
+    await save({ state: "failed", stages, error, finishedAt: now() });
     console.error(`[worker] job ${jobId} failed: ${error.code}`, error.diagnostic ?? "");
-    recordUsage(job, { renderMs: Date.now() - startedMs, inputBytes, outputBytes: 0, outputSeconds: 0, succeeded: false });
+    await recordUsage(job, { renderMs: Date.now() - startedMs, inputBytes, outputBytes: 0, outputSeconds: 0, succeeded: false });
   } finally {
+    cancel.stop();
+    await writes;
     storage.remove(tmpKey);
   }
 }
 
-export function recordUsage(job: Job, u: { renderMs: number; inputBytes: number; outputBytes: number; outputSeconds: number; succeeded: boolean }) {
+export async function recordUsage(job: Job, u: { renderMs: number; inputBytes: number; outputBytes: number; outputSeconds: number; succeeded: boolean }) {
   try {
-    getDb()
-      .prepare(
-        `INSERT INTO usage_records (id, job_id, conversation_id, render_ms, input_bytes, output_bytes, output_seconds, external_ai_calls, succeeded, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
-      )
-      .run(newId("use"), job.id, job.conversationId, u.renderMs, u.inputBytes, u.outputBytes, u.outputSeconds, u.succeeded ? 1 : 0, now());
+    await getDb().run(
+      `INSERT INTO usage_records (id, job_id, conversation_id, render_ms, input_bytes, output_bytes, output_seconds, external_ai_calls, succeeded, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+      [newId("use"), job.id, job.conversationId, u.renderMs, u.inputBytes, u.outputBytes, u.outputSeconds, u.succeeded ? 1 : 0, now()],
+    );
   } catch {
     // Conversation may have been deleted mid-render; usage is best-effort.
   }

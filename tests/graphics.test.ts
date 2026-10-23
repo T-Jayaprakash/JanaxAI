@@ -15,7 +15,7 @@ const hasChrome = !!chromePath();
 
 describe("graphics rendering", { skip: hasChrome ? false : "Chrome not installed" }, () => {
   let dir: string;
-  before(() => {
+  before(async () => {
     dir = useTempDataDir();
   });
   after(closeBrowser);
@@ -34,8 +34,8 @@ describe("graphics rendering", { skip: hasChrome ? false : "Chrome not installed
   });
 
   it("renders an animated composition to MP4 through the worker pipeline", async () => {
-    const conversationId = createConversation().id;
-    const job = createMotionJob({
+    const conversationId = (await createConversation()).id;
+    const job = await createMotionJob({
       conversationId,
       motion: {
         title: "Intro",
@@ -48,13 +48,13 @@ describe("graphics rendering", { skip: hasChrome ? false : "Chrome not installed
       },
       planInfo: { planner: "test", usesAI: false, changes: [], unsupported: [], notes: [] },
     });
-    const claimed = claimNextJob();
+    const claimed = await claimNextJob();
     assert.equal(claimed?.id, job.id);
     await processJob(job.id);
-    const done = getJob(job.id)!;
+    const done = (await getJob(job.id))!;
     assert.equal(done.state, "completed", JSON.stringify(done.error));
-    const v = getVersion(done.outputVersionId!)!;
-    const a = getAsset(v.assetId)!;
+    const v = (await getVersion(done.outputVersionId!))!;
+    const a = (await getAsset(v.assetId))!;
     const info = await probe(getStorage().absolutePath(a.storageKey));
     assert.equal(info.width, 1280);
     assert.equal(info.height, 720);

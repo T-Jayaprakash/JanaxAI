@@ -13,14 +13,14 @@ import { sweepWorkspaces } from "../src/lib/studio/cleanup";
 let stopping = false;
 
 async function main() {
-  const recovered = recoverInterruptedJobs();
+  const recovered = await recoverInterruptedJobs();
   if (recovered.requeued || recovered.failed) {
     console.log(`[worker] recovered interrupted jobs: ${recovered.requeued} re-queued, ${recovered.failed} failed`);
   }
   cleanupOrphanChromes();
-  const interruptedReplies = recoverInterruptedAgentRuns();
+  const interruptedReplies = await recoverInterruptedAgentRuns();
   if (interruptedReplies) console.log(`[worker] marked ${interruptedReplies} interrupted assistant replies as failed`);
-  setWorkerHeartbeat();
+  await setWorkerHeartbeat();
   const beat = setInterval(setWorkerHeartbeat, 2000);
   // Intermediate renders of idle conversations are cleared so disks don't fill up.
   const sweep = () =>
@@ -34,7 +34,7 @@ async function main() {
   void agentLoop();
 
   while (!stopping) {
-    const job = claimNextJob();
+    const job = await claimNextJob();
     if (!job) {
       await new Promise((r) => setTimeout(r, 750));
       continue;
@@ -52,7 +52,7 @@ async function main() {
 async function agentLoop() {
   const active = new Set<Promise<void>>();
   while (!stopping) {
-    const run = active.size < 3 ? claimNextAgentRun() : null;
+    const run = active.size < 3 ? await claimNextAgentRun() : null;
     if (!run) {
       await new Promise((r) => setTimeout(r, 300));
       continue;

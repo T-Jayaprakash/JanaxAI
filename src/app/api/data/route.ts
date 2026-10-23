@@ -5,15 +5,15 @@ import { getAsset, deleteAssetFiles } from "@/lib/assets";
 
 /** Deletes every conversation, upload, render and usage record. */
 export async function DELETE() {
-  for (const c of listConversations()) deleteConversation(c.id);
+  for (const c of await listConversations()) await deleteConversation(c.id);
   const db = getDb();
   // Uploads that were never sent in a message.
-  for (const { id } of db.prepare("SELECT id FROM assets").all() as { id: string }[]) {
-    const a = getAsset(id);
+  for (const { id } of await db.all<{ id: string }>("SELECT id FROM assets")) {
+    const a = await getAsset(id);
     if (a) deleteAssetFiles(a);
   }
-  db.prepare("DELETE FROM assets").run();
-  db.prepare("DELETE FROM usage_records").run();
+  await db.run("DELETE FROM assets");
+  await db.run("DELETE FROM usage_records");
   getStorage().ensureDir("tmp");
   return Response.json({ deleted: true });
 }

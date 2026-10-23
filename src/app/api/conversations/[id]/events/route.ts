@@ -10,7 +10,7 @@ import { isWorkerAlive, jobsUpdatedSince, toPublicJob } from "@/lib/jobs";
 export async function GET(req: Request, ctx: RouteContext<"/api/conversations/[id]/events">) {
   await dynamic();
   const { id } = await ctx.params;
-  if (!getConversation(id)) return jsonError(404, "Conversation not found.");
+  if (!await getConversation(id)) return jsonError(404, "Conversation not found.");
   const encoder = new TextEncoder();
   let since = Number(new URL(req.url).searchParams.get("since")) || 0;
   let msgSince = Date.now();
@@ -28,14 +28,27 @@ export async function GET(req: Request, ctx: RouteContext<"/api/conversations/[i
           clearInterval(timer);
         }
       };
-      const tick = () => {
-        if (!getConversation(id)) {
+      let ticking = false;
+      const tick = async () => {
+        // A slow database round must not overlap the next one.
+        if (ticking) return;
+        ticking = true;
+        try {
+          await tickOnce();
+        } catch (err) {
+          console.error("[events] update failed", err);
+        } finally {
+          ticking = false;
+        }
+      };
+      const tickOnce = async () => {
+        if (!(await getConversation(id))) {
           send("deleted", {});
           clearInterval(timer);
           controller.close();
           return;
         }
-        const jobs = jobsUpdatedSince(id, since);
+        const jobs = await jobsUpdatedSince(id, since);
         let terminal = false;
         for (const job of jobs) {
           since = Math.max(since, job.updatedAt);
@@ -43,21 +56,21 @@ export async function GET(req: Request, ctx: RouteContext<"/api/conversations/[i
           if (job.state === "completed") terminal = true;
         }
         // Assistant replies stream in as message updates.
-        for (const m of messagesUpdatedSince(id, msgSince)) {
+        for (const m of await messagesUpdatedSince(id, msgSince)) {
           msgSince = Math.max(msgSince, m.updatedAt);
           send("message", m);
           const key = `${m.meta.status}:${(m.meta.designs as unknown[] | undefined)?.length ?? 0}:${(m.meta.jobIds as unknown[] | undefined)?.length ?? 0}:${m.versionId}`;
           if (seenStatus.get(m.id) !== key && (m.meta.designs || m.meta.jobIds || m.meta.status === "done" || m.versionId)) terminal = true;
           seenStatus.set(m.id, key);
         }
-        if (terminal) send("snapshot", getSnapshot(id));
-        const alive = isWorkerAlive();
+        if (terminal) send("snapshot", await getSnapshot(id));
+        const alive = await isWorkerAlive();
         if (alive !== lastWorker || ticks % 20 === 0) send("worker", { alive });
         lastWorker = alive;
         ticks++;
       };
-      tick();
-      timer = setInterval(tick, 600);
+      void tick();
+      timer = setInterval(() => void tick(), 600);
       req.signal.addEventListener("abort", () => {
         clearInterval(timer);
         try {

@@ -20,7 +20,7 @@ function render(p: Partial<PlannerInput>) {
 }
 
 describe("planner parsing", () => {
-  it("reads durations", () => {
+  it("reads durations", async () => {
     assert.equal(parseDuration("a 15-second reel"), 15);
     assert.equal(parseDuration("make it 30 seconds"), 30);
     assert.equal(parseDuration("12s please"), 12);
@@ -29,7 +29,7 @@ describe("planner parsing", () => {
     assert.equal(parseDuration("make it vertical"), null);
   });
 
-  it("reads aspect ratios", () => {
+  it("reads aspect ratios", async () => {
     assert.equal(parseAspect("instagram reel"), "9:16");
     assert.equal(parseAspect("youtube shorts"), "9:16");
     assert.equal(parseAspect("change to 16:9"), "16:9");
@@ -38,7 +38,7 @@ describe("planner parsing", () => {
     assert.equal(parseAspect("make it short"), null);
   });
 
-  it("reads clip removal", () => {
+  it("reads clip removal", async () => {
     assert.equal(parseRemoveClip("remove the second clip"), 1);
     assert.equal(parseRemoveClip("delete clip 3"), 2);
     assert.equal(parseRemoveClip("drop the last clip"), -1);
@@ -47,12 +47,12 @@ describe("planner parsing", () => {
 });
 
 describe("planner decisions", () => {
-  it("asks for footage when nothing is attached", () => {
+  it("asks for footage when nothing is attached", async () => {
     const r = planWithRules(input({ text: "make a reel" }));
     assert.equal(r.kind, "reply");
   });
 
-  it("plans the MVP request", () => {
+  it("plans the MVP request", async () => {
     const r = render({ text: "Combine these clips into a 15-second vertical reel.", attachments: [clip(1), clip(2)] });
     assert.equal(r.fresh, true);
     assert.equal(r.spec.aspect, "9:16");
@@ -61,7 +61,7 @@ describe("planner decisions", () => {
     assert.match(r.summary, /15-second vertical/);
   });
 
-  it("revises the base spec and keeps everything else", () => {
+  it("revises the base spec and keeps everything else", async () => {
     const base = render({ text: "make a cinematic reel", attachments: [clip(1), clip(2), clip(3)] }).spec;
     const r = render({ text: "remove the second clip and make it black and white", baseSpec: base, baseDuration: 20 });
     assert.equal(r.fresh, false);
@@ -70,20 +70,20 @@ describe("planner decisions", () => {
     assert.equal(r.spec.aspect, base.aspect);
   });
 
-  it("'shorter' uses the rendered duration of the base version", () => {
+  it("'shorter' uses the rendered duration of the base version", async () => {
     const base = render({ text: "edit", attachments: [clip(1)] }).spec;
     const r = render({ text: "make it shorter", baseSpec: base, baseDuration: 20 });
     assert.equal(r.spec.targetDuration, 14);
   });
 
-  it("understands a little Tanglish", () => {
+  it("understands a little Tanglish", async () => {
     const base = render({ text: "edit", attachments: [clip(1), clip(2)] }).spec;
     const r = render({ text: "sound venam, vertical ah maathu", baseSpec: base, baseDuration: 10 });
     assert.equal(r.spec.audio.keepOriginal, false);
     assert.equal(r.spec.aspect, "9:16");
   });
 
-  it("is honest about unsupported requests", () => {
+  it("is honest about unsupported requests", async () => {
     const base = render({ text: "edit", attachments: [clip(1)] }).spec;
     const r = planWithRules(input({ text: "add tamil subtitles and background music", baseSpec: base, baseDuration: 10 }));
     assert.equal(r.kind, "reply");
@@ -93,7 +93,7 @@ describe("planner decisions", () => {
     assert.match(mixed.summary, /Heads up/);
   });
 
-  it("navigates versions without rendering", () => {
+  it("navigates versions without rendering", async () => {
     const versions = [
       { id: "v1", number: 1 },
       { id: "v2", number: 2 },
@@ -106,7 +106,7 @@ describe("planner decisions", () => {
     assert.equal(n.kind === "reply" && n.showVersionId, "v1");
   });
 
-  it("appends clips when asked to add new footage", () => {
+  it("appends clips when asked to add new footage", async () => {
     const base = render({ text: "edit", attachments: [clip(1)] }).spec;
     const r = render({ text: "add this clip at the end", attachments: [clip(9)], baseSpec: base, baseDuration: 10 });
     assert.equal(r.fresh, false);
@@ -135,7 +135,7 @@ describe("timeline", () => {
       ...p,
     });
 
-  it("hits the target duration including transition overlap", () => {
+  it("hits the target duration including transition overlap", async () => {
     const tl = buildTimeline(spec({}), assets, limits);
     assert.equal(tl.width, 720);
     assert.equal(tl.height, 1280);
@@ -145,18 +145,18 @@ describe("timeline", () => {
     for (const s of tl.segments) assert.ok(s.srcStart >= 0 && s.srcEnd <= (s.mediaType === "image" ? 3 : 10) + 1e-6);
   });
 
-  it("uses all footage and explains when the target is too long", () => {
+  it("uses all footage and explains when the target is too long", async () => {
     const tl = buildTimeline(spec({ targetDuration: 60 }), assets, limits);
     assert.ok(tl.totalDuration < 19);
     assert.ok(tl.notes.some((n) => n.includes("only have")));
   });
 
-  it("caps output length", () => {
+  it("caps output length", async () => {
     const tl = buildTimeline(spec({ targetDuration: null }), assets, { ...limits, maxOutputSeconds: 5 });
     assert.ok(tl.totalDuration <= 5.01);
   });
 
-  it("builds FFmpeg argument arrays without shell strings", () => {
+  it("builds FFmpeg argument arrays without shell strings", async () => {
     const s = spec({ look: "cinematic", fadeInOut: true });
     const tl = buildTimeline(s, assets, limits);
     const seg = segmentArgs({ input: "/in/a b;rm -rf.mp4", output: "/out/x.mp4", seg: tl.segments[1], timeline: tl, spec: s });

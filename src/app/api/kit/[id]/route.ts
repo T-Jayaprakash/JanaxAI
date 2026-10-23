@@ -8,11 +8,11 @@ export async function PATCH(req: Request, ctx: RouteContext<"/api/kit/[id]">) {
   const { id } = await ctx.params;
   const parsed = Patch.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return jsonError(400, "Invalid changes.");
-  const item = updateKitItem(id, parsed.data);
+  const item = await updateKitItem(id, parsed.data);
   return item ? Response.json({ item: toPublicKitItem(item) }) : jsonError(404, "Not found.");
 }
 
 export async function DELETE(_req: Request, ctx: RouteContext<"/api/kit/[id]">) {
   const { id } = await ctx.params;
-  return deleteKitItem(id) ? Response.json({ ok: true }) : jsonError(404, "Not found.");
+  return await deleteKitItem(id) ? Response.json({ ok: true }) : jsonError(404, "Not found.");
 }

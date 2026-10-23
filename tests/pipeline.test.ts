@@ -19,14 +19,14 @@ async function upload(p: string, mime: string, conversationId: string | null = n
 }
 
 async function runQueued() {
-  const job = claimNextJob();
+  const job = await claimNextJob();
   assert.ok(job, "expected a queued job");
   await processJob(job.id);
-  return getJob(job.id)!;
+  return (await getJob(job.id))!;
 }
 
 describe("uploads", () => {
-  before(() => {
+  before(async () => {
     useTempDataDir();
     fx = fixtures();
   });
@@ -77,10 +77,10 @@ describe("uploads", () => {
 describe("end-to-end editing journey", () => {
   let conversationId: string;
 
-  before(() => {
+  before(async () => {
     useTempDataDir();
     fx = fixtures();
-    conversationId = createConversation().id;
+    conversationId = (await createConversation()).id;
   });
 
   it("renders a 6-second vertical reel from two clips", async () => {
@@ -96,9 +96,9 @@ describe("end-to-end editing journey", () => {
     assert.equal(job.state, "completed", JSON.stringify(job.error));
     assert.ok(job.stages.filter((s) => ["inspect", "plan", "cut", "render", "validate", "preview"].includes(s.id)).every((s) => s.status === "done"));
 
-    const version = getVersion(job.outputVersionId!)!;
+    const version = (await getVersion(job.outputVersionId!))!;
     assert.equal(version.number, 1);
-    const out = getAsset(version.assetId)!;
+    const out = (await getAsset(version.assetId))!;
     const info = await probe(getStorage().absolutePath(out.storageKey));
     assert.equal(info.width, 720);
     assert.equal(info.height, 1280);
@@ -109,20 +109,20 @@ describe("end-to-end editing journey", () => {
   it("revises the previous version (shorter + 16:9)", async () => {
     const res = await handleUserMessage(conversationId, "Make it 4 seconds and change to 16:9", []);
     assert.ok(res.job);
-    const v1 = listVersions(conversationId)[0];
+    const v1 = (await listVersions(conversationId))[0];
     assert.equal(res.job.parentVersionId, v1.id);
     assert.deepEqual(res.job.spec.clips, v1.spec.clips, "revision keeps the same inputs");
 
     const job = await runQueued();
     assert.equal(job.state, "completed", JSON.stringify(job.error));
-    const v2 = getVersion(job.outputVersionId!)!;
+    const v2 = (await getVersion(job.outputVersionId!))!;
     assert.equal(v2.number, 2);
     assert.equal(v2.parentVersionId, v1.id);
     assert.equal(v2.width, 1280);
     assert.equal(v2.height, 720);
     assert.ok(Math.abs(v2.duration - 4) < 0.5);
     // The original version is preserved.
-    assert.ok(getStorage().exists(getAsset(v1.assetId)!.storageKey));
+    assert.ok(getStorage().exists((await getAsset(v1.assetId))!.storageKey));
   });
 
   it("renders a cinematic look with an image and a removed clip", async () => {
@@ -144,7 +144,7 @@ describe("end-to-end editing journey", () => {
   it("shows a previous version without rendering, and revises from it", async () => {
     const res = await handleUserMessage(conversationId, "show me version 1", []);
     assert.equal(res.job, null);
-    const v1 = listVersions(conversationId)[0];
+    const v1 = (await listVersions(conversationId))[0];
     assert.equal(res.messages[1].versionId, v1.id);
     const next = await handleUserMessage(conversationId, "make it square", []);
     assert.equal(next.job?.parentVersionId, v1.id);
@@ -153,8 +153,8 @@ describe("end-to-end editing journey", () => {
     assert.equal(job.state, "completed");
   });
 
-  it("restores everything from a snapshot (page refresh)", () => {
-    const snap = getSnapshot(conversationId)!;
+  it("restores everything from a snapshot (page refresh)", async () => {
+    const snap = (await getSnapshot(conversationId))!;
     assert.ok(snap.messages.length >= 10);
     assert.equal(snap.versions.length, 5);
     assert.ok(snap.jobs.every((j) => j.state === "completed"));
@@ -165,10 +165,10 @@ describe("end-to-end editing journey", () => {
 
 describe("failures, retry and recovery", () => {
   let conversationId: string;
-  before(() => {
+  before(async () => {
     useTempDataDir();
     fx = fixtures();
-    conversationId = createConversation().id;
+    conversationId = (await createConversation()).id;
   });
 
   it("reports a missing input file as a clear failure and can be retried once fixed", async () => {
@@ -184,7 +184,7 @@ describe("failures, retry and recovery", () => {
     assert.ok(!failed.error!.message.includes(process.env.JANUX_DATA_DIR!));
 
     fs.renameSync(real + ".bak", real);
-    const retried = retryJob(res.job!.id)!;
+    const retried = (await retryJob(res.job!.id))!;
     assert.equal(retried.state, "queued");
     const ok = await runQueued();
     assert.equal(ok.state, "completed", JSON.stringify(ok.error));
@@ -201,17 +201,18 @@ describe("failures, retry and recovery", () => {
     assert.ok(job.error!.diagnostic, "diagnostic kept internally");
   });
 
-  it("re-queues jobs interrupted by a worker crash", () => {
-    const job = createJob({
+  it("re-queues jobs interrupted by a worker crash", async () => {
+    const source = (await getJob((await listVersions(conversationId))[0].jobId))!;
+    const job = await createJob({
       conversationId,
       parentVersionId: null,
-      spec: getJob(listVersions(conversationId)[0].jobId)!.spec,
+      spec: source.spec,
       planInfo: { planner: "test", usesAI: false, changes: [], unsupported: [], notes: [] },
-      timeline: getJob(listVersions(conversationId)[0].jobId)!.timeline!,
+      timeline: source.timeline!,
     });
-    getDb().prepare("UPDATE jobs SET state = 'rendering', attempts = 1 WHERE id = ?").run(job.id);
-    const r = recoverInterruptedJobs();
+    await getDb().run("UPDATE jobs SET state = 'rendering', attempts = 1 WHERE id = ?", [job.id]);
+    const r = await recoverInterruptedJobs();
     assert.equal(r.requeued, 1);
-    assert.equal(getJob(job.id)!.state, "queued");
+    assert.equal((await getJob(job.id))!.state, "queued");
   });
 });

@@ -60,16 +60,16 @@ export function monthStartIST(now: number): { start: number; next: number } {
   };
 }
 
-export function usageReport(now = Date.now()): UsageReport {
+export async function usageReport(now = Date.now()): Promise<UsageReport> {
   const plan = currentPlan();
   const db = getDb();
   const since = Math.min(weekStartIST(now), now - 2 * SESSION_MS);
   // A request counts once the assistant starts working on it; queued or stopped-before-start ones don't.
-  const times = (db.prepare("SELECT created_at FROM agent_runs WHERE created_at >= ? AND attempts > 0").all(since) as { created_at: number }[]).map((r) => r.created_at);
+  const times = (await db.all<{ created_at: number }>("SELECT created_at FROM agent_runs WHERE created_at >= ? AND attempts > 0", [since])).map((r) => Number(r.created_at));
   const start = sessionStart(times, now);
   const week = weekStartIST(now);
   const month = monthStartIST(now);
-  const exports = (db.prepare("SELECT COUNT(*) AS n FROM versions WHERE created_at >= ?").get(month.start) as { n: number }).n;
+  const exports = Number((await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM versions WHERE created_at >= ?", [month.start]))?.n ?? 0);
   return {
     plan: { id: plan.id, name: plan.name },
     enforced: false,

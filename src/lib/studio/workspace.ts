@@ -22,7 +22,7 @@ export function inputName(a: Asset): string {
 }
 
 /** Links every asset of the conversation (plus the brand logo) into in/. */
-export function syncWorkspace(conversationId: string, extraAssetIds: string[] = []): { dir: string; assets: Asset[] } {
+export async function syncWorkspace(conversationId: string, extraAssetIds: string[] = []): Promise<{ dir: string; assets: Asset[] }> {
   const dir = workspaceDir(conversationId);
   for (const sub of ["in", "work", "cache"]) fs.mkdirSync(path.join(/*turbopackIgnore: true*/ dir, sub), { recursive: true });
   // lib/ = the shared asset library (fonts, looks, sound effects), read-only.
@@ -33,11 +33,11 @@ export function syncWorkspace(conversationId: string, extraAssetIds: string[] = 
   const kit = path.join(/*turbopackIgnore: true*/ dir, "kit");
   const kitTarget = getStorage().ensureDir("kit");
   if (!fs.existsSync(kit)) fs.symlinkSync(kitTarget, kit);
-  const ids = (getDb().prepare("SELECT id FROM assets WHERE conversation_id = ? ORDER BY created_at").all(conversationId) as { id: string }[]).map((r) => r.id);
+  const ids = (await getDb().all<{ id: string }>("SELECT id FROM assets WHERE conversation_id = ? ORDER BY created_at", [conversationId])).map((r) => r.id);
   const storage = getStorage();
   const assets: Asset[] = [];
   for (const id of [...new Set([...ids, ...extraAssetIds])]) {
-    const a = getAsset(id);
+    const a = await getAsset(id);
     if (!a || !storage.exists(a.storageKey)) continue;
     const target = storage.absolutePath(a.storageKey);
     // Originals are read-only so no edit can overwrite them through a link.

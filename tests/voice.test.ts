@@ -47,8 +47,8 @@ describe("voiceover providers", () => {
 
   before(async () => {
     useTempDataDir();
-    const conversationId = createConversation().id;
-    const msg = addMessage({ conversationId, role: "assistant", text: "", attachments: [], jobId: null, versionId: null });
+    const conversationId = (await createConversation()).id;
+    const msg = await addMessage({ conversationId, role: "assistant", text: "", attachments: [], jobId: null, versionId: null });
     ctx = { conversationId, messageId: msg.id, runId: "run_test", shouldCancel: () => false };
     await new Promise<void>((r) => mock.server.listen(0, "127.0.0.1", r));
     const base = `http://127.0.0.1:${(mock.server.address() as AddressInfo).port}`;
@@ -56,7 +56,7 @@ describe("voiceover providers", () => {
     process.env.GOOGLE_TTS_BASE_URL = base;
   });
 
-  after(() => {
+  after(async () => {
     mock.server.close();
     for (const k of ["ELEVENLABS_API_KEY", "GOOGLE_TTS_API_KEY", "ELEVENLABS_BASE_URL", "GOOGLE_TTS_BASE_URL", "JANUX_VOICE"]) {
       if (saved[k] === undefined) delete process.env[k];
@@ -64,7 +64,7 @@ describe("voiceover providers", () => {
     }
   });
 
-  it("turns character timings into word timings", () => {
+  it("turns character timings into word timings", async () => {
     const chars = [..."hi  there"];
     const words = wordsFromAlignment({ characters: chars, character_start_times_seconds: chars.map((_, i) => i), character_end_times_seconds: chars.map((_, i) => i + 1) });
     assert.deepEqual(words, [

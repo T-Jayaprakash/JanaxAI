@@ -102,7 +102,7 @@ export const claudeCliBackend: AgentBackend = {
       const pid = child.pid;
       if (pid) {
         activeGroups.add(pid);
-        getDb().prepare("UPDATE agent_runs SET pid = ? WHERE id = ?").run(pid, input.runId);
+        void getDb().run("UPDATE agent_runs SET pid = ? WHERE id = ?", [pid, input.runId]);
       }
       const stop = () => pid && killProcessGroup(pid);
       let buffer = "";

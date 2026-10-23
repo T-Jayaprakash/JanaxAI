@@ -4,7 +4,7 @@ import { ingestKitFile, KIT_KINDS, listKit, toPublicKitItem, type KitKind } from
 
 export async function GET() {
   await dynamic();
-  return Response.json({ items: listKit().map(toPublicKitItem) });
+  return Response.json({ items: (await listKit()).map(toPublicKitItem) });
 }
 
 /** Raw-body upload into My Kit: ?kind=font&name=…&notes=…&credit=…&rights=1 */

@@ -6,5 +6,5 @@ export async function POST(req: Request) {
   if (limited) return limited;
   const parsed = StyleSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return jsonError(400, "Give the style a name and describe it.");
-  return Response.json({ item: toPublicKitItem(saveStyle(parsed.data)) }, { status: 201 });
+  return Response.json({ item: toPublicKitItem(await saveStyle(parsed.data)) }, { status: 201 });
 }

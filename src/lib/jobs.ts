@@ -1,5 +1,5 @@
 import { getConfig } from "./config";
-import { getDb, newId, now, parseJson } from "./db";
+import { getDb, newId, now, parseJson, type Row } from "./db";
 import type { EditSpec } from "./spec";
 import type { Timeline } from "./timeline";
 
@@ -119,8 +119,6 @@ export function initialStages(unsupported: string[], kind: JobKind = "edit"): St
   return stages;
 }
 
-type Row = Record<string, unknown>;
-
 function fromRow(r: Row): Job {
   const kind = ((r.kind as string) ?? "edit") as JobKind;
   const spec = parseJson(r.spec as string, {} as EditSpec);
@@ -147,19 +145,17 @@ function fromRow(r: Row): Job {
   };
 }
 
-export function getJob(id: string): Job | null {
-  const r = getDb().prepare("SELECT * FROM jobs WHERE id = ?").get(id) as Row | undefined;
+export async function getJob(id: string): Promise<Job | null> {
+  const r = await getDb().get("SELECT * FROM jobs WHERE id = ?", [id]);
   return r ? fromRow(r) : null;
 }
 
-export function listJobs(conversationId: string): Job[] {
-  return (getDb().prepare("SELECT * FROM jobs WHERE conversation_id = ? ORDER BY created_at").all(conversationId) as Row[]).map(fromRow);
+export async function listJobs(conversationId: string): Promise<Job[]> {
+  return (await getDb().all("SELECT * FROM jobs WHERE conversation_id = ? ORDER BY created_at", [conversationId])).map(fromRow);
 }
 
-export function jobsUpdatedSince(conversationId: string, since: number): Job[] {
-  return (
-    getDb().prepare("SELECT * FROM jobs WHERE conversation_id = ? AND updated_at > ? ORDER BY updated_at").all(conversationId, since) as Row[]
-  ).map(fromRow);
+export async function jobsUpdatedSince(conversationId: string, since: number): Promise<Job[]> {
+  return (await getDb().all("SELECT * FROM jobs WHERE conversation_id = ? AND updated_at > ? ORDER BY updated_at", [conversationId, since])).map(fromRow);
 }
 
 export function createJob(input: {
@@ -168,30 +164,26 @@ export function createJob(input: {
   spec: EditSpec;
   planInfo: PlanInfo;
   timeline: Timeline;
-}): Job {
+}): Promise<Job> {
   return insertJob("edit", input.conversationId, input.parentVersionId, input.spec, input.planInfo, input.timeline);
 }
 
-export function createMotionJob(input: { conversationId: string; motion: MotionSpec; planInfo: PlanInfo }): Job {
+export function createMotionJob(input: { conversationId: string; motion: MotionSpec; planInfo: PlanInfo }): Promise<Job> {
   return insertJob("motion", input.conversationId, null, input.motion, input.planInfo, null);
 }
 
-function insertJob(kind: JobKind, conversationId: string, parentVersionId: string | null, spec: unknown, planInfo: PlanInfo, timeline: Timeline | null): Job {
+async function insertJob(kind: JobKind, conversationId: string, parentVersionId: string | null, spec: unknown, planInfo: PlanInfo, timeline: Timeline | null): Promise<Job> {
   const t = now();
   const id = newId("job");
-  getDb()
-    .prepare(
-      `INSERT INTO jobs (id, kind, conversation_id, parent_version_id, spec, plan_info, timeline, state, stages, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`,
-    )
-    .run(
-      id, kind, conversationId, parentVersionId, JSON.stringify(spec), JSON.stringify(planInfo),
-      timeline ? JSON.stringify(timeline) : null, JSON.stringify(initialStages(planInfo.unsupported, kind)), t, t,
-    );
-  return getJob(id)!;
+  await getDb().run(
+    `INSERT INTO jobs (id, kind, conversation_id, parent_version_id, spec, plan_info, timeline, state, stages, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`,
+    [id, kind, conversationId, parentVersionId, JSON.stringify(spec), JSON.stringify(planInfo), timeline ? JSON.stringify(timeline) : null, JSON.stringify(initialStages(planInfo.unsupported, kind)), t, t],
+  );
+  return (await getJob(id))!;
 }
 
-export function updateJob(id: string, patch: Partial<Pick<Job, "state" | "stages" | "error" | "outputVersionId" | "timeline" | "heartbeatAt" | "startedAt" | "finishedAt">>) {
+export async function updateJob(id: string, patch: Partial<Pick<Job, "state" | "stages" | "error" | "outputVersionId" | "timeline" | "heartbeatAt" | "startedAt" | "finishedAt">>) {
   const cols: string[] = [];
   const vals: unknown[] = [];
   const map: Record<string, [string, (v: unknown) => unknown]> = {
@@ -212,75 +204,74 @@ export function updateJob(id: string, patch: Partial<Pick<Job, "state" | "stages
   }
   cols.push("updated_at = ?");
   vals.push(now());
-  getDb().prepare(`UPDATE jobs SET ${cols.join(", ")} WHERE id = ?`).run(...vals, id);
+  await getDb().run(`UPDATE jobs SET ${cols.join(", ")} WHERE id = ?`, [...vals, id]);
 }
 
 /** Atomically takes the oldest queued job. Safe with multiple workers. */
-export function claimNextJob(): Job | null {
+export async function claimNextJob(): Promise<Job | null> {
   const t = now();
-  const r = getDb()
-    .prepare(
-      `UPDATE jobs SET state = 'validating', attempts = attempts + 1, started_at = ?, heartbeat_at = ?, updated_at = ?
-       WHERE id = (SELECT id FROM jobs WHERE state = 'queued' AND cancel_requested = 0 ORDER BY created_at LIMIT 1)
-         AND state = 'queued'
-       RETURNING *`,
-    )
-    .get(t, t, t) as Row | undefined;
+  const db = getDb();
+  // Postgres: SKIP LOCKED lets many workers claim different jobs at once.
+  const lock = db.dialect === "postgres" ? " FOR UPDATE SKIP LOCKED" : "";
+  const r = await db.get(
+    `UPDATE jobs SET state = 'validating', attempts = attempts + 1, started_at = ?, heartbeat_at = ?, updated_at = ?
+     WHERE id = (SELECT id FROM jobs WHERE state = 'queued' AND cancel_requested = 0 ORDER BY created_at LIMIT 1${lock})
+       AND state = 'queued'
+     RETURNING *`,
+    [t, t, t],
+  );
   return r ? fromRow(r) : null;
 }
 
-export function isCancelRequested(id: string): boolean {
-  const r = getDb().prepare("SELECT cancel_requested FROM jobs WHERE id = ?").get(id) as { cancel_requested: number } | undefined;
+export async function isCancelRequested(id: string): Promise<boolean> {
+  const r = await getDb().get<{ cancel_requested: number }>("SELECT cancel_requested FROM jobs WHERE id = ?", [id]);
   return !r || !!r.cancel_requested;
 }
 
-export function requestCancel(id: string): Job | null {
-  const job = getJob(id);
+export async function requestCancel(id: string): Promise<Job | null> {
+  const job = await getJob(id);
   if (!job || TERMINAL_STATES.includes(job.state)) return job;
   const db = getDb();
   if (job.state === "queued") {
-    db.prepare("UPDATE jobs SET cancel_requested = 1, state = 'cancelled', finished_at = ?, updated_at = ? WHERE id = ?").run(now(), now(), id);
+    await db.run("UPDATE jobs SET cancel_requested = 1, state = 'cancelled', finished_at = ?, updated_at = ? WHERE id = ?", [now(), now(), id]);
     const stages = job.stages.map((s) => (s.status === "pending" ? { ...s, status: "skipped" as const } : s));
-    updateJob(id, { stages });
+    await updateJob(id, { stages });
   } else {
     // The worker sees the flag, kills FFmpeg and marks the job cancelled.
-    db.prepare("UPDATE jobs SET cancel_requested = 1, updated_at = ? WHERE id = ?").run(now(), id);
+    await db.run("UPDATE jobs SET cancel_requested = 1, updated_at = ? WHERE id = ?", [now(), id]);
   }
-  return getJob(id);
+  return await getJob(id);
 }
 
 /** Puts a failed or cancelled job back in the queue with fresh stages. */
-export function retryJob(id: string): Job | null {
-  const job = getJob(id);
+export async function retryJob(id: string): Promise<Job | null> {
+  const job = await getJob(id);
   if (!job || (job.state !== "failed" && job.state !== "cancelled")) return null;
-  getDb()
-    .prepare(
-      `UPDATE jobs SET state = 'queued', stages = ?, error = NULL, cancel_requested = 0, attempts = 0,
-       started_at = NULL, finished_at = NULL, heartbeat_at = NULL, updated_at = ? WHERE id = ?`,
-    )
-    .run(JSON.stringify(initialStages(job.planInfo.unsupported, job.kind)), now(), id);
-  return getJob(id);
+  await getDb().run(
+    `UPDATE jobs SET state = 'queued', stages = ?, error = NULL, cancel_requested = 0, attempts = 0,
+     started_at = NULL, finished_at = NULL, heartbeat_at = NULL, updated_at = ? WHERE id = ?`,
+    [JSON.stringify(initialStages(job.planInfo.unsupported, job.kind)), now(), id],
+  );
+  return await getJob(id);
 }
 
 /**
  * Called when a worker starts: jobs left mid-flight by a crashed worker are
  * re-queued (up to the attempt limit) or failed with an explanation.
  */
-export function recoverInterruptedJobs(): { requeued: number; failed: number } {
+export async function recoverInterruptedJobs(): Promise<{ requeued: number; failed: number }> {
   const { maxJobAttempts } = getConfig();
-  const stuck = (getDb().prepare(`SELECT * FROM jobs WHERE state IN (${ACTIVE_STATES.map(() => "?").join(",")})`).all(...ACTIVE_STATES) as Row[]).map(fromRow);
+  const stuck = (await getDb().all(`SELECT * FROM jobs WHERE state IN (${ACTIVE_STATES.map(() => "?").join(",")})`, ACTIVE_STATES)).map(fromRow);
   let requeued = 0;
   let failed = 0;
   for (const job of stuck) {
     if (job.cancelRequested) {
-      updateJob(job.id, { state: "cancelled", finishedAt: now() });
+      await updateJob(job.id, { state: "cancelled", finishedAt: now() });
     } else if (job.attempts < maxJobAttempts) {
-      getDb()
-        .prepare("UPDATE jobs SET state = 'queued', stages = ?, updated_at = ? WHERE id = ?")
-        .run(JSON.stringify(initialStages(job.planInfo.unsupported, job.kind)), now(), job.id);
+      await getDb().run("UPDATE jobs SET state = 'queued', stages = ?, updated_at = ? WHERE id = ?", [JSON.stringify(initialStages(job.planInfo.unsupported, job.kind)), now(), job.id]);
       requeued++;
     } else {
-      updateJob(job.id, {
+      await updateJob(job.id, {
         state: "failed",
         finishedAt: now(),
         error: { message: "The render worker stopped unexpectedly several times while processing this video.", code: "worker_crash", retryable: true },
@@ -291,13 +282,13 @@ export function recoverInterruptedJobs(): { requeued: number; failed: number } {
   return { requeued, failed };
 }
 
-export function setWorkerHeartbeat() {
-  getDb().prepare("INSERT INTO meta (key, value) VALUES ('worker_heartbeat', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(now()));
+export async function setWorkerHeartbeat() {
+  await getDb().run("INSERT INTO meta (key, value) VALUES ('worker_heartbeat', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [String(now())]);
 }
 
-export function isWorkerAlive(): boolean {
-  const r = getDb().prepare("SELECT value FROM meta WHERE key = 'worker_heartbeat'").get() as { value: string } | undefined;
-  return !!r && now() - Number(r.value) < getConfig().workerStaleMs;
+export async function isWorkerAlive(): Promise<boolean> {
+  const r = await getDb().get<{ value: string }>("SELECT value FROM meta WHERE key = 'worker_heartbeat'");
+  return !!r && Date.now() - Number(r.value) < getConfig().workerStaleMs;
 }
 
 /** Browser-safe job view. */

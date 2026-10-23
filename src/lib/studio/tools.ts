@@ -72,14 +72,18 @@ function decodeEntities(s: string): string {
   return s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
 }
 
+const originalNames = new Map<string, string>();
+
+/** Loads the conversation's original file names so labels can show them. */
+async function loadDisplayNames(conversationId: string) {
+  const rows = await getDb().all<{ id: string; original_name: string }>("SELECT id, original_name FROM assets WHERE conversation_id = ?", [conversationId]);
+  for (const r of rows) originalNames.set(r.id, r.original_name);
+}
+
 /** Friendly name for labels: in/ast_x.mp4 → the user's original file name. */
 function displayName(rel: string): string {
   const m = rel.match(/^in\/(ast_[a-f0-9]{32})/);
-  if (m) {
-    const row = getDb().prepare("SELECT original_name FROM assets WHERE id = ?").get(m[1]) as { original_name: string } | undefined;
-    if (row) return row.original_name;
-  }
-  return path.basename(rel);
+  return (m && originalNames.get(m[1])) || path.basename(rel);
 }
 const RelPath = z.string().min(3).max(200).describe("Workspace path, e.g. in/ast_....mp4 or work/cut.mp4");
 
@@ -105,7 +109,7 @@ const listMedia = tool({
   schema: z.object({}),
   label: () => "Looking at your files",
   async run(_input, ctx) {
-    const { dir, assets } = syncWorkspace(ctx.conversationId);
+    const { dir, assets } = await syncWorkspace(ctx.conversationId);
     const work = listWork(dir);
     return {
       text: [`Inputs:`, assets.length ? assets.map(describeAsset).join("\n") : "(none uploaded yet)", ``, `Work files:`, work.length ? work.join("\n") : "(none)"].join("\n"),
@@ -125,7 +129,7 @@ const inspectMedia = tool({
   }),
   label: (i) => `Watching ${displayName(i.path)}`,
   async run(input, ctx) {
-    syncWorkspace(ctx.conversationId);
+    await syncWorkspace(ctx.conversationId);
     const file = resolveInWorkspace(ctx.conversationId, input.path, { mustExist: true });
     const info = await probe(file);
     const lines = [
@@ -161,7 +165,7 @@ const viewFrames = tool({
   schema: z.object({ path: RelPath, times: z.array(z.number().min(0)).min(1).max(8) }),
   label: (i) => i.path.startsWith("work/") ? "Checking the edit" : `Looking closely at ${displayName(i.path)}`,
   async run(input, ctx) {
-    syncWorkspace(ctx.conversationId);
+    await syncWorkspace(ctx.conversationId);
     const file = resolveInWorkspace(ctx.conversationId, input.path, { mustExist: true });
     const images: string[] = [];
     const cache = path.dirname(resolveInWorkspace(ctx.conversationId, "cache/x"));
@@ -181,7 +185,7 @@ const transcribeTool = tool({
   schema: z.object({ path: RelPath }),
   label: (i) => `Listening to ${displayName(i.path)}`,
   async run(input, ctx) {
-    syncWorkspace(ctx.conversationId);
+    await syncWorkspace(ctx.conversationId);
     const file = resolveInWorkspace(ctx.conversationId, input.path, { mustExist: true });
     const cfg = speechConfig();
     if (!fs.existsSync(cfg.model)) return { text: "Speech recognition isn't installed (npm run setup:speech).", isError: true };
@@ -231,7 +235,7 @@ const analyzeAudioTool = tool({
   schema: z.object({ path: RelPath }),
   label: (i) => `Finding the beat in ${displayName(i.path)}`,
   async run(input, ctx) {
-    syncWorkspace(ctx.conversationId);
+    await syncWorkspace(ctx.conversationId);
     const file = resolveInWorkspace(ctx.conversationId, input.path, { mustExist: true });
     const a = await analyzeAudio(file, path.dirname(resolveInWorkspace(ctx.conversationId, "cache/x")));
     return {
@@ -252,7 +256,7 @@ const writeFileTool = tool({
   schema: z.object({ path: RelPath, content: z.string().max(500_000) }),
   label: () => "Preparing edit data",
   async run(input, ctx) {
-    syncWorkspace(ctx.conversationId);
+    await syncWorkspace(ctx.conversationId);
     if (!/\.(txt|srt|cube|json|csv)$/i.test(input.path)) return { text: "Only .txt, .srt, .cube, .json or .csv files can be written.", isError: true };
     const file = resolveInWorkspace(ctx.conversationId, input.path, { writable: true });
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -289,7 +293,7 @@ const runFfmpegTool = tool({
   }),
   label: (i) => i.purpose,
   async run(input, ctx) {
-    syncWorkspace(ctx.conversationId);
+    await syncWorkspace(ctx.conversationId);
     if ((await freeDiskBytes()) < getConfig().minFreeDiskBytes) return { text: "The server is low on disk space.", isError: true };
     let plan;
     try {
@@ -329,9 +333,9 @@ function usedInArgs(args: string[]): string[] {
  * library fonts it names, adds the animated-emoji runtime, and records which
  * library assets were used (for licence credits on delivery).
  */
-function prepareComposition(conversationId: string, html: string): string {
+async function prepareComposition(conversationId: string, html: string): Promise<string> {
   const withImages = inlineWorkspaceImages(conversationId, html);
-  const fonts = fontFaceCss(withImages);
+  const fonts = await fontFaceCss(withImages);
   const emoji = emojiRuntime(withImages);
   recordUsedAssets(conversationId, [...fonts.used, ...emoji.used]);
   const head = `${fonts.css ? `<style>${fonts.css}</style>` : ""}`;
@@ -395,7 +399,7 @@ const renderAnimationTool = tool({
   }),
   label: (i) => (i.transparent ? "Animating captions and graphics" : "Animating motion graphics"),
   async run(input, ctx) {
-    syncWorkspace(ctx.conversationId);
+    await syncWorkspace(ctx.conversationId);
     const out = resolveInWorkspace(ctx.conversationId, input.output, { writable: true });
     if (input.transparent && !out.endsWith(".mov")) return { text: "Transparent animations must be saved as .mov.", isError: true };
     if (!input.transparent && !out.endsWith(".mp4")) return { text: "Opaque animations must be saved as .mp4.", isError: true };
@@ -404,7 +408,7 @@ const renderAnimationTool = tool({
     const height = input.height - (input.height % 2);
     try {
       await renderHtmlToVideo({
-        html: prepareComposition(ctx.conversationId, input.html),
+        html: await prepareComposition(ctx.conversationId, input.html),
         width,
         height,
         duration: input.duration,
@@ -433,7 +437,7 @@ const searchLibraryTool = tool({
   label: (i) => `Searching the library for “${i.query}”`,
   async run(input) {
     const installed = libraryInstalled();
-    const hits = searchLibrary(input.query, input.kind, input.limit ?? 12).filter((h) => installed || h.source === "kit");
+    const hits = (await searchLibrary(input.query, input.kind, input.limit ?? 12)).filter((h) => installed || h.source === "kit");
     const note = installed ? "" : "\n(The shared asset library isn't installed on this server yet: npm run setup:library. Only the user's kit is searchable.)";
     if (!hits.length) return { text: `Nothing matched. Try broader words, or a kind filter.${note}` };
     return { text: hits.map((h) => `- ${h.id} — ${h.name}${h.source === "kit" ? " [user's kit]" : ""}: ${h.description}\n  use: ${h.usage}`).join("\n") + note };
@@ -453,7 +457,7 @@ const getAssetTool = tool({
   async run(input) {
     const [kind, key] = input.id.split(":");
     if (kind === "kit") {
-      const item = getKitItem(key);
+      const item = await getKitItem(key);
       if (!item) return { text: "That kit item no longer exists.", isError: true };
       return { text: `${item.name} (user's ${item.kind})${item.file ? `\nfile: kit/${item.file}` : ""}${item.notes ? `\nnotes: ${item.notes}` : ""}\nuse: ${kitUsage(item)}${item.credit ? `\ncredit when used: ${item.credit}` : ""}` };
     }
@@ -475,7 +479,7 @@ const getAssetTool = tool({
       const c = CAPTION_STYLES.find((x) => x.id === key);
       return c ? { text: `Caption style ${c.id}: ${JSON.stringify(c)}` } : { text: "Unknown caption style.", isError: true };
     }
-    const entry = findEntry(input.id);
+    const entry = await findEntry(input.id);
     return entry ? { text: `${entry.name}: ${entry.description}\nuse: ${entry.usage}\nlicence: ${entry.license.name}` } : { text: "Unknown asset id.", isError: true };
   },
 });
@@ -502,7 +506,7 @@ const renderCaptionsTool = tool({
   }),
   label: () => "Animating captions",
   async run(input, ctx) {
-    syncWorkspace(ctx.conversationId);
+    await syncWorkspace(ctx.conversationId);
     const style = CAPTION_STYLES.find((c) => c.id === input.preset);
     if (!style) return { text: `Unknown caption preset "${input.preset}". Use search_library kind caption_style.`, isError: true };
     if (!input.output.endsWith(".mov")) return { text: "Captions render to a transparent .mov.", isError: true };
@@ -532,7 +536,7 @@ const renderCaptionsTool = tool({
     fs.mkdirSync(path.dirname(out), { recursive: true });
     try {
       await renderHtmlToVideo({
-        html: prepareComposition(ctx.conversationId, html),
+        html: await prepareComposition(ctx.conversationId, html),
         width: input.width - (input.width % 2),
         height: input.height - (input.height % 2),
         duration: input.duration,
@@ -565,7 +569,7 @@ const renderTransitionTool = tool({
   }),
   label: (i) => `Making a ${i.style} transition`,
   async run(input, ctx) {
-    syncWorkspace(ctx.conversationId);
+    await syncWorkspace(ctx.conversationId);
     const def = OVERLAY_TRANSITIONS.find((t) => t.id === input.style);
     if (!def) return { text: `Unknown transition "${input.style}". Options: ${OVERLAY_TRANSITIONS.map((t) => t.id).join(", ")}. For blends between two clips use xfade in run_ffmpeg.`, isError: true };
     if (!input.output.endsWith(".mov")) return { text: "Overlay transitions render to a transparent .mov.", isError: true };
@@ -588,7 +592,7 @@ const deliverTool = tool({
   label: (i) => `Delivering “${decodeEntities(i.title)}”`,
   async run(rawInput, ctx) {
     const input = { ...rawInput, title: decodeEntities(rawInput.title) };
-    syncWorkspace(ctx.conversationId);
+    await syncWorkspace(ctx.conversationId);
     const src = resolveInWorkspace(ctx.conversationId, input.path, { mustExist: true });
     const info = await probe(src);
     if (!info.hasVideo || !info.duration || info.duration < 0.5) return { text: "That file has no playable video.", isError: true };
@@ -633,8 +637,8 @@ const deliverTool = tool({
       metadata: final,
       createdAt: now(),
     };
-    insertAsset(asset);
-    const version = insertVersion({
+    await insertAsset(asset);
+    const version = await insertVersion({
       conversationId: ctx.conversationId,
       jobId: ctx.runId,
       parentVersionId: null,
@@ -644,12 +648,12 @@ const deliverTool = tool({
       width: final.width!,
       height: final.height!,
     });
-    getDb().prepare("UPDATE messages SET version_id = ?, updated_at = ? WHERE id = ?").run(version.id, now(), ctx.messageId);
-    const credits = creditsFor(readUsedAssets(ctx.conversationId)).map((c) => c.license.attribution!);
-    patchMeta(ctx.messageId, (m) => ({ ...m, deliveries: [...(m.deliveries ?? []), { versionId: version.id, title: input.title, ...(credits.length ? { credits } : {}) }] }));
-    touchConversation(ctx.conversationId);
+    await getDb().run("UPDATE messages SET version_id = ?, updated_at = ? WHERE id = ?", [version.id, now(), ctx.messageId]);
+    const credits = (await creditsFor(readUsedAssets(ctx.conversationId))).map((c) => c.license.attribution!);
+    await patchMeta(ctx.messageId, (m) => ({ ...m, deliveries: [...(m.deliveries ?? []), { versionId: version.id, title: input.title, ...(credits.length ? { credits } : {}) }] }));
+    await touchConversation(ctx.conversationId);
     // The delivered file is now an input for later revisions.
-    syncWorkspace(ctx.conversationId);
+    await syncWorkspace(ctx.conversationId);
     return {
       text: `Delivered as version ${version.number}: ${final.duration!.toFixed(2)}s, ${final.width}x${final.height}. It's now also available as ${inputName(asset)} for further edits.`,
     };
@@ -695,7 +699,7 @@ const voiceoverTool = tool({
   }),
   label: (i) => `Recording voiceover (${LANG_NAMES[i.language]})`,
   async run(input, ctx) {
-    syncWorkspace(ctx.conversationId);
+    await syncWorkspace(ctx.conversationId);
     if (!input.output.endsWith(".m4a")) return { text: "Voiceovers are saved as .m4a.", isError: true };
     const out = resolveInWorkspace(ctx.conversationId, input.output, { writable: true });
     let result;
@@ -734,7 +738,7 @@ const polishVoiceTool = tool({
   }),
   label: () => "Polishing the voice",
   async run(input, ctx) {
-    syncWorkspace(ctx.conversationId);
+    await syncWorkspace(ctx.conversationId);
     if (!input.output.endsWith(".m4a")) return { text: "Polished voice is saved as .m4a.", isError: true };
     try {
       const src = resolveInWorkspace(ctx.conversationId, input.input, { mustExist: true });
@@ -758,7 +762,7 @@ const sfxTool = tool({
   }),
   label: (i) => `Making a ${i.type} sound effect`,
   async run(input, ctx) {
-    syncWorkspace(ctx.conversationId);
+    await syncWorkspace(ctx.conversationId);
     if (!input.output.endsWith(".wav")) return { text: "Sound effects are saved as .wav.", isError: true };
     const out = resolveInWorkspace(ctx.conversationId, input.output, { writable: true });
     await makeSoundEffect(input.type, input.duration ?? SFX_DEFAULT_DURATION[input.type], out, input.volume ?? 1);
@@ -781,7 +785,7 @@ const reframeTool = tool({
   }),
   label: (i) => `Following the subject in ${displayName(i.input)}${i.zoom && i.zoom > 1 ? ` (zoom ${i.zoom}x)` : ""}`,
   async run(input, ctx) {
-    syncWorkspace(ctx.conversationId);
+    await syncWorkspace(ctx.conversationId);
     if (!input.output.endsWith(".mp4")) return { text: "Reframed clips are saved as .mp4.", isError: true };
     if (!trackingSupported() && !fs.existsSync(trackerBinary())) return { text: "Face tracking needs a Mac (Apple Vision) and isn't available on this server. Use a centred crop with run_ffmpeg instead.", isError: true };
     const src = resolveInWorkspace(ctx.conversationId, input.input, { mustExist: true });
@@ -839,7 +843,7 @@ const findShotsTool = tool({
   }),
   label: (i) => `Finding shots in ${displayName(i.path)}`,
   async run(input, ctx) {
-    syncWorkspace(ctx.conversationId);
+    await syncWorkspace(ctx.conversationId);
     const src = resolveInWorkspace(ctx.conversationId, input.path, { mustExist: true });
     const info = await probe(src);
     if (!info.hasVideo || !info.duration || info.duration < 0.5) return { text: "That file isn't a video clip.", isError: true };
@@ -887,7 +891,7 @@ const saveStyleTool = tool({
   schema: StyleSchema,
   label: (i) => `Saving your style “${i.name}”`,
   async run(input) {
-    const item = saveStyle(input);
+    const item = await saveStyle(input);
     return { text: `Saved style "${item.name}" to the user's kit (kit:${item.id}).` };
   },
 });
@@ -898,7 +902,7 @@ const brandTool = tool({
   schema: BrandKitSchema.partial(),
   label: () => "Saving your brand details",
   async run(input) {
-    const kit = updateBrandKit(input);
+    const kit = await updateBrandKit(input);
     return { text: `Saved. Name: ${kit.businessName || "(not set)"}.` };
   },
 });
@@ -942,14 +946,15 @@ export async function runStudioTool(name: string, input: unknown, ctx: StudioCon
   const parsed = t.schema.safeParse(input ?? {});
   if (!parsed.success) return { text: `Invalid input: ${z.prettifyError(parsed.error).slice(0, 1500)}`, isError: true };
   if (ctx.shouldCancel()) return { text: "Stopped by the user.", isError: true };
+  await loadDisplayNames(ctx.conversationId).catch(() => undefined);
   const label = t.label(parsed.data).slice(0, 120);
   const quiet = name === "list_media";
-  const idx = quiet ? -1 : addActivity(ctx.messageId, label);
+  const idx = quiet ? -1 : await addActivity(ctx.messageId, label);
   let lastProgress = 0;
   const progress = (fraction: number, detail?: string) => {
     if (quiet || Date.now() - lastProgress < 700) return;
     lastProgress = Date.now();
-    updateActivity(ctx.messageId, idx, { progress: Math.max(0, Math.min(1, fraction)), detail });
+    void updateActivity(ctx.messageId, idx, { progress: Math.max(0, Math.min(1, fraction)), detail }).catch(() => undefined);
   };
   try {
     const out = await t.run(parsed.data, { ...ctx, progress });
@@ -957,14 +962,14 @@ export async function runStudioTool(name: string, input: unknown, ctx: StudioCon
       const root = workspaceDir(ctx.conversationId);
       const images = (out.images ?? []).map((p) => path.relative(root, p)).filter((p) => p.startsWith("cache/"));
       const firstLine = out.text.split("\n").find((l) => l.trim() && !/^Done\.?$/.test(l.trim())) ?? "";
-      finishActivity(ctx.messageId, idx, out.isError ? "failed" : "done", out.isError ? `${label} (retrying)` : label, {
+      await finishActivity(ctx.messageId, idx, out.isError ? "failed" : "done", out.isError ? `${label} (retrying)` : label, {
         images: images.length ? images : undefined,
         detail: firstLine.slice(0, 200) || undefined,
       });
     }
     return out;
   } catch (err) {
-    if (!quiet) finishActivity(ctx.messageId, idx, "failed");
+    if (!quiet) await finishActivity(ctx.messageId, idx, "failed").catch(() => undefined);
     return { text: err instanceof Error ? err.message : String(err), isError: true };
   }
 }

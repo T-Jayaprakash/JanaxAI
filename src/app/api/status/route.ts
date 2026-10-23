@@ -13,17 +13,15 @@ import { freeDiskBytes, storageBytesUsed } from "@/lib/storage";
 export async function GET() {
   await dynamic();
   const cfg = getConfig();
-  const usage = getDb()
-    .prepare(
-      `SELECT COUNT(*) AS jobs, COALESCE(SUM(succeeded), 0) AS succeeded, COALESCE(SUM(render_ms), 0) AS render_ms,
-        COALESCE(SUM(input_bytes), 0) AS input_bytes, COALESCE(SUM(output_bytes), 0) AS output_bytes,
-        COALESCE(SUM(output_seconds), 0) AS output_seconds
-       FROM usage_records`,
-    )
-    .get() as Record<string, number>;
+  const usage = (await getDb().get<Record<string, number>>(
+    `SELECT COUNT(*) AS jobs, COALESCE(SUM(succeeded), 0) AS succeeded, COALESCE(SUM(render_ms), 0) AS render_ms,
+      COALESCE(SUM(input_bytes), 0) AS input_bytes, COALESCE(SUM(output_bytes), 0) AS output_bytes,
+      COALESCE(SUM(output_seconds), 0) AS output_seconds
+     FROM usage_records`,
+  ))!;
   const planner = getPlanner();
   return Response.json({
-    worker: { alive: isWorkerAlive() },
+    worker: { alive: await isWorkerAlive() },
     planner: { label: planner.label, usesAI: planner.usesAI },
     assistant: (() => {
       const b = selectBackend();

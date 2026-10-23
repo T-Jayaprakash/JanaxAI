@@ -28,14 +28,14 @@ describe("My Kit", () => {
   let ctx: StudioContext;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "janux-kit-"));
 
-  before(() => {
+  before(async () => {
     useTempDataDir();
-    const conversationId = createConversation().id;
-    const msg = addMessage({ conversationId, role: "assistant", text: "", attachments: [], jobId: null, versionId: null });
+    const conversationId = (await createConversation()).id;
+    const msg = await addMessage({ conversationId, role: "assistant", text: "", attachments: [], jobId: null, versionId: null });
     ctx = { conversationId, messageId: msg.id, runId: "run_test", shouldCancel: () => false };
   });
 
-  it("validates .cube LUTs by content", () => {
+  it("validates .cube LUTs by content", async () => {
     assert.equal(validateCube(cube(2)).size, 2);
     assert.throws(() => validateCube(cube(2, 7)), UploadError);
     assert.throws(() => validateCube("just text"), UploadError);
@@ -47,7 +47,7 @@ describe("My Kit", () => {
     await assert.rejects(ingestKitFile({ body: bytes(cube(2, 3)), kind: "lut", originalName: "look.cube" }), /colour rows/);
     await assert.rejects(ingestKitFile({ body: bytes("x"), kind: "logo", originalName: "logo.exe" }), /For logo upload/);
     await assert.rejects(ingestKitFile({ body: bytes("not an image"), kind: "logo", originalName: "logo.png" }));
-    assert.equal(listKit().length, 0);
+    assert.equal((await listKit()).length, 0);
     assert.deepEqual(fs.readdirSync(path.join(process.env.JANUX_DATA_DIR!, "kit")), []);
   });
 
@@ -69,10 +69,10 @@ describe("My Kit", () => {
     assert.ok(fs.existsSync(resolveInWorkspace(ctx.conversationId, `kit/${lut.file}`)));
 
     // Search puts the user's own resources first; credits come from the kit.
-    const hits = searchLibrary("warm", undefined, 5);
+    const hits = await searchLibrary("warm", undefined, 5);
     assert.equal(hits[0].id, `kit:${lut.id}`);
-    assert.deepEqual(creditsFor([`kit:${lut.id}`]).map((c) => c.license.attribution), ["LUT by Example Studio"]);
-    assert.match(fontFaceCss(`<div style="font-family:'Brand Sans Bold'">Hi</div>`).css, /font-family:'Brand Sans Bold'/);
+    assert.deepEqual((await creditsFor([`kit:${lut.id}`])).map((c) => c.license.attribution), ["LUT by Example Studio"]);
+    assert.match((await fontFaceCss(`<div style="font-family:'Brand Sans Bold'">Hi</div>`)).css, /font-family:'Brand Sans Bold'/);
 
     // The guard lets FFmpeg read kit files (inputs and LUTs) but never write there.
     assert.doesNotThrow(() => checkFfmpegArgs(["-i", `kit/${sfx.file}`, "-vf", `lut3d=kit/${lut.file}`, "work/o.mp4"]));
@@ -97,20 +97,20 @@ describe("My Kit", () => {
   it("saves styles (by name) and shows the kit to the editor", async () => {
     const saved = await runStudioTool("save_style", { name: "Shop reels", notes: "Clean white captions, warm grade, no emoji." }, ctx);
     assert.ok(!saved.isError, saved.text);
-    saveStyle({ name: "shop reels", notes: "Clean white captions, warm grade, no emoji, logo at the end." });
-    const styles = listKit("style");
+    await saveStyle({ name: "shop reels", notes: "Clean white captions, warm grade, no emoji, logo at the end." });
+    const styles = await listKit("style");
     assert.equal(styles.length, 1);
-    const context = turnContext(ctx.conversationId);
+    const context = await turnContext(ctx.conversationId);
     assert.match(context, /Style "Shop reels".*logo at the end/);
     assert.match(context, /font 'Brand Sans Bold'/);
   });
 
-  it("deletes items and their files", () => {
-    const logo = listKit("logo")[0];
+  it("deletes items and their files", async () => {
+    const logo = (await listKit("logo"))[0];
     const file = path.join(process.env.JANUX_DATA_DIR!, "kit", logo.file!);
     assert.ok(fs.existsSync(file));
-    assert.equal(deleteKitItem(logo.id), true);
+    assert.equal(await deleteKitItem(logo.id), true);
     assert.equal(fs.existsSync(file), false);
-    assert.equal(getKitItem(logo.id), null);
+    assert.equal(await getKitItem(logo.id), null);
   });
 });

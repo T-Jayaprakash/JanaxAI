@@ -11,11 +11,12 @@ import { makeThumbnail, probe } from "../media/probe";
 import type { EditSpec } from "../spec";
 import { getStorage } from "../storage";
 import { recordUsage } from "./pipeline";
+import { watchCancel } from "../cancel";
 
 /** Renders a motion-graphic job (animated HTML → MP4) and saves it as a version. */
 export async function processMotionJob(jobId: string): Promise<void> {
   const storage = getStorage();
-  const initial = getJob(jobId);
+  const initial = await getJob(jobId);
   if (!initial?.motion) return;
   const motion = initial.motion;
   let stages: Stage[] = initial.stages;
@@ -24,10 +25,15 @@ export async function processMotionJob(jobId: string): Promise<void> {
   const tmpDir = storage.ensureDir(tmpKey);
   let lastWrite = 0;
 
+  // Saves are chained so a slow progress write can never land after a newer state.
+  let writes: Promise<unknown> = Promise.resolve();
   const save = (patch: Parameters<typeof updateJob>[1] = {}) => {
-    updateJob(jobId, { stages, heartbeatAt: now(), ...patch });
+    const next = { stages, heartbeatAt: now(), ...patch };
+    writes = writes.then(() => updateJob(jobId, next)).catch((err) => console.error("[worker] couldn't save job progress", err));
     lastWrite = Date.now();
+    return writes;
   };
+  const cancel = watchCancel(() => isCancelRequested(jobId));
   const set = (id: string, patch: Partial<Stage>, jobPatch: Parameters<typeof updateJob>[1] = {}) => {
     stages = stages.map((s) => (s.id === id ? { ...s, ...patch } : s));
     save(jobPatch);
@@ -35,12 +41,12 @@ export async function processMotionJob(jobId: string): Promise<void> {
   const start = (id: string, detail?: string) =>
     set(id, { status: "active", startedAt: now(), detail }, { state: MOTION_PIPELINE.find((p) => p.id === id)!.state });
   const finish = (id: string, detail?: string) => set(id, { status: "done", finishedAt: now(), progress: undefined, ...(detail ? { detail } : {}) });
-  const shouldCancel = () => isCancelRequested(jobId);
+  const shouldCancel = cancel.shouldCancel;
 
   try {
     start("prepare");
     const { width, height } = motionSize(motion.format);
-    const html = resolveAssetRefs(motion.html);
+    const html = await resolveAssetRefs(motion.html);
     finish("prepare", `${motion.title} · ${width}×${height} · ${motion.duration}s at ${motion.fps}fps`);
 
     start("frames");
@@ -76,7 +82,7 @@ export async function processMotionJob(jobId: string): Promise<void> {
     const thumbKey = `thumbs/${assetId}.jpg`;
     fs.renameSync(outFile, storage.absolutePath(outKey));
     await makeThumbnail(storage.absolutePath(outKey), storage.absolutePath(thumbKey), info.duration);
-    const job = getJob(jobId);
+    const job = await getJob(jobId);
     if (!job) throw new CancelledError();
     const asset: Asset = {
       id: assetId,
@@ -95,8 +101,8 @@ export async function processMotionJob(jobId: string): Promise<void> {
       metadata: info,
       createdAt: now(),
     };
-    insertAsset(asset);
-    const version = insertVersion({
+    await insertAsset(asset);
+    const version = await insertVersion({
       conversationId: job.conversationId,
       jobId: job.id,
       parentVersionId: null,
@@ -106,17 +112,17 @@ export async function processMotionJob(jobId: string): Promise<void> {
       width: info.width!,
       height: info.height!,
     });
-    setMessageVersion(job.id, version.id);
+    await setMessageVersion(job.id, version.id);
     finish("preview", `Version ${version.number} saved`);
-    updateJob(jobId, { state: "completed", outputVersionId: version.id, finishedAt: now(), stages });
-    touchConversation(job.conversationId);
-    recordUsage(job, { renderMs: Date.now() - startedMs, inputBytes: 0, outputBytes: asset.size, outputSeconds: info.duration, succeeded: true });
+    await save({ state: "completed", outputVersionId: version.id, finishedAt: now(), stages });
+    await touchConversation(job.conversationId);
+    await recordUsage(job, { renderMs: Date.now() - startedMs, inputBytes: 0, outputBytes: asset.size, outputSeconds: info.duration, succeeded: true });
   } catch (err) {
-    const job = getJob(jobId);
+    const job = await getJob(jobId);
     if (!job) return;
     if (err instanceof CancelledError) {
       stages = stages.map((s) => (s.status === "active" || s.status === "pending" ? { ...s, status: "skipped", progress: undefined } : s));
-      updateJob(jobId, { state: "cancelled", stages, finishedAt: now() });
+      await save({ state: "cancelled", stages, finishedAt: now() });
       return;
     }
     const error: JobError =
@@ -126,10 +132,12 @@ export async function processMotionJob(jobId: string): Promise<void> {
     stages = stages.map((s) =>
       s.status === "active" ? { ...s, status: "failed", detail: error.message, progress: undefined } : s.status === "pending" ? { ...s, status: "skipped" } : s,
     );
-    updateJob(jobId, { state: "failed", stages, error, finishedAt: now() });
+    await save({ state: "failed", stages, error, finishedAt: now() });
     console.error(`[worker] motion job ${jobId} failed: ${error.code}`, error.diagnostic ?? "");
-    recordUsage(job, { renderMs: Date.now() - startedMs, inputBytes: 0, outputBytes: 0, outputSeconds: 0, succeeded: false });
+    await recordUsage(job, { renderMs: Date.now() - startedMs, inputBytes: 0, outputBytes: 0, outputSeconds: 0, succeeded: false });
   } finally {
+    cancel.stop();
+    await writes;
     storage.remove(tmpKey);
   }
 }

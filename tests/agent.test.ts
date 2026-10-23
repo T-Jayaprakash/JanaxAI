@@ -38,7 +38,7 @@ describe("ffmpeg guard", () => {
   const ok = (args: string[]) => checkFfmpegArgs(args);
   const bad = (args: string[]) => assert.throws(() => checkFfmpegArgs(args));
 
-  it("allows normal workspace edits and finds outputs", () => {
+  it("allows normal workspace edits and finds outputs", async () => {
     const plan = ok(["-i", "in/a.mp4", "-vf", "scale=1080:-2", "-c:v", "libx264", "work/out.mp4"]);
     assert.deepEqual(plan.outputs, ["work/out.mp4"]);
     assert.deepEqual(plan.inputs, ["in/a.mp4"]);
@@ -47,7 +47,7 @@ describe("ffmpeg guard", () => {
     ok(["-i", "work/a.mp4", "-metadata:s:v", "title=x", "work/b.mp4"]);
   });
 
-  it("blocks network, outside paths, file-reading filters and overwriting inputs", () => {
+  it("blocks network, outside paths, file-reading filters and overwriting inputs", async () => {
     bad(["-i", "https://evil.example/x.mp4", "work/o.mp4"]);
     bad(["-i", "/etc/passwd", "work/o.mp4"]);
     bad(["-i", "in/../../secret.mp4", "work/o.mp4"]);
@@ -64,8 +64,8 @@ describe("studio tools", () => {
   let clipRel: string;
   before(async () => {
     useTempDataDir();
-    const conversationId = createConversation().id;
-    const msg = addMessage({ conversationId, role: "assistant", text: "", attachments: [], jobId: null, versionId: null });
+    const conversationId = (await createConversation()).id;
+    const msg = await addMessage({ conversationId, role: "assistant", text: "", attachments: [], jobId: null, versionId: null });
     ctx = { conversationId, messageId: msg.id, runId: "run_test", shouldCancel: () => false };
     const fx = fixtures();
     const a = await ingestUpload({ body: fileChunks(fx.landscapeWithAudio), originalName: "clip.mp4", mime: "video/mp4", conversationId });
@@ -142,13 +142,13 @@ describe("studio tools", () => {
 describe("agent", () => {
   let conversationId: string;
   let messageId: string;
-  before(() => {
+  before(async () => {
     useTempDataDir();
-    conversationId = createConversation().id;
-    messageId = addMessage({ conversationId, role: "assistant", text: "", attachments: [], jobId: null, versionId: null }).id;
+    conversationId = (await createConversation()).id;
+    messageId = (await addMessage({ conversationId, role: "assistant", text: "", attachments: [], jobId: null, versionId: null })).id;
   });
 
-  it("is off in rules mode and refuses the CLI engine in production", () => {
+  it("is off in rules mode and refuses the CLI engine in production", async () => {
     assert.equal(selectBackend(), null);
     const env = { ...process.env };
     process.env.JANUX_AI = "claude-cli";
@@ -185,7 +185,7 @@ describe("agent", () => {
       },
     );
     setStreamFactoryForTests(null);
-    assert.equal(getBrandKit().businessName, "Trichy Vlogs");
+    assert.equal((await getBrandKit()).businessName, "Trichy Vlogs");
     assert.match(text, /Saving your channel name\.\n\nDone!/);
     const first = seen[0] as { messages: { role: string }[]; fallbacks: string; betas: string[]; tools: { name: string; eager_input_streaming?: boolean }[] };
     assert.equal(first.messages[0].role, "user", "history never starts with an assistant turn");
@@ -196,12 +196,12 @@ describe("agent", () => {
     assert.equal(second.messages.at(-1)!.content[0].type, "tool_result");
   });
 
-  it("builds context with brand kit and workspace paths", () => {
-    addMessage({ conversationId, role: "user", text: "hello", attachments: [], jobId: null, versionId: null });
-    const ctxText = turnContext(conversationId);
+  it("builds context with brand kit and workspace paths", async () => {
+    await addMessage({ conversationId, role: "user", text: "hello", attachments: [], jobId: null, versionId: null });
+    const ctxText = await turnContext(conversationId);
     assert.match(ctxText, /Trichy Vlogs/);
     assert.match(ctxText, /IST/);
-    assert.equal(historyTurns(conversationId, "none").at(-1)!.text, "hello");
-    assert.equal(getVersion("ver_missing"), null);
+    assert.equal((await historyTurns(conversationId, "none")).at(-1)!.text, "hello");
+    assert.equal(await getVersion("ver_missing"), null);
   });
 });

@@ -66,15 +66,15 @@ const fromRow = (r: Row): KitItem => ({
   createdAt: r.created_at as number,
 });
 
-export function listKit(kind?: KitKind): KitItem[] {
+export async function listKit(kind?: KitKind): Promise<KitItem[]> {
   const rows = kind
-    ? getDb().prepare("SELECT * FROM kit_items WHERE kind = ? ORDER BY created_at DESC").all(kind)
-    : getDb().prepare("SELECT * FROM kit_items ORDER BY created_at DESC").all();
-  return (rows as Row[]).map(fromRow);
+    ? await getDb().all<Row>("SELECT * FROM kit_items WHERE kind = ? ORDER BY created_at DESC", [kind])
+    : await getDb().all<Row>("SELECT * FROM kit_items ORDER BY created_at DESC");
+  return rows.map(fromRow);
 }
 
-export function getKitItem(id: string): KitItem | null {
-  const r = getDb().prepare("SELECT * FROM kit_items WHERE id = ?").get(id) as Row | undefined;
+export async function getKitItem(id: string): Promise<KitItem | null> {
+  const r = await getDb().get<Row>("SELECT * FROM kit_items WHERE id = ?", [id]);
   return r ? fromRow(r) : null;
 }
 
@@ -181,7 +181,7 @@ export async function ingestKitFile(input: {
       }
     }
     const item: KitItem = { id, kind: input.kind, name, file: fileName, notes: cleanText(input.notes, 2000), credit: cleanText(input.credit, 200) || null, meta, size, createdAt: now() };
-    insertKitItem(item);
+    await insertKitItem(item);
     return item;
   } catch (err) {
     out.destroy();
@@ -198,40 +198,40 @@ export const StyleSchema = z.object({
   notes: z.string().trim().min(1).max(4000),
 });
 
-export function saveStyle(input: z.infer<typeof StyleSchema>): KitItem {
-  const existing = listKit("style").find((s) => s.name.toLowerCase() === input.name.toLowerCase());
+export async function saveStyle(input: z.infer<typeof StyleSchema>): Promise<KitItem> {
+  const existing = (await listKit("style")).find((s) => s.name.toLowerCase() === input.name.toLowerCase());
   if (existing) {
-    getDb().prepare("UPDATE kit_items SET notes = ? WHERE id = ?").run(cleanText(input.notes, 4000), existing.id);
+    await getDb().run("UPDATE kit_items SET notes = ? WHERE id = ?", [cleanText(input.notes, 4000), existing.id]);
     return { ...existing, notes: cleanText(input.notes, 4000) };
   }
   const item: KitItem = { id: newId("kit"), kind: "style", name: cleanText(input.name, 80), file: null, notes: cleanText(input.notes, 4000), credit: null, meta: {}, size: 0, createdAt: now() };
-  insertKitItem(item);
+  await insertKitItem(item);
   return item;
 }
 
-function insertKitItem(i: KitItem) {
-  getDb()
-    .prepare("INSERT INTO kit_items (id, kind, name, file, notes, credit, meta, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-    .run(i.id, i.kind, i.name, i.file, i.notes, i.credit, JSON.stringify(i.meta), i.size, i.createdAt);
+async function insertKitItem(i: KitItem) {
+  await getDb().run("INSERT INTO kit_items (id, kind, name, file, notes, credit, meta, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+    i.id, i.kind, i.name, i.file, i.notes, i.credit, JSON.stringify(i.meta), i.size, i.createdAt,
+  ]);
 }
 
-export function updateKitItem(id: string, patch: { name?: string; notes?: string; credit?: string | null }): KitItem | null {
-  const item = getKitItem(id);
+export async function updateKitItem(id: string, patch: { name?: string; notes?: string; credit?: string | null }): Promise<KitItem | null> {
+  const item = await getKitItem(id);
   if (!item) return null;
   const next = {
     name: patch.name !== undefined ? cleanText(patch.name, 80) || item.name : item.name,
     notes: patch.notes !== undefined ? cleanText(patch.notes, item.kind === "style" ? 4000 : 2000) : item.notes,
     credit: patch.credit !== undefined ? cleanText(patch.credit, 200) || null : item.credit,
   };
-  getDb().prepare("UPDATE kit_items SET name = ?, notes = ?, credit = ? WHERE id = ?").run(next.name, next.notes, next.credit, id);
+  await getDb().run("UPDATE kit_items SET name = ?, notes = ?, credit = ? WHERE id = ?", [next.name, next.notes, next.credit, id]);
   return { ...item, ...next };
 }
 
-export function deleteKitItem(id: string): boolean {
-  const item = getKitItem(id);
+export async function deleteKitItem(id: string): Promise<boolean> {
+  const item = await getKitItem(id);
   if (!item) return false;
   if (item.file) getStorage().remove(`kit/${item.file}`);
-  getDb().prepare("DELETE FROM kit_items WHERE id = ?").run(id);
+  await getDb().run("DELETE FROM kit_items WHERE id = ?", [id]);
   return true;
 }
 

@@ -1,4 +1,4 @@
-import { getAsset, type Asset } from "../assets";
+import { getAsset, getAssets, type Asset } from "../assets";
 import { describeBrandKit, getBrandKit } from "../brand";
 import { listMessages, listVersions, type Message } from "../conversations";
 import { getDb, parseJson } from "../db";
@@ -135,26 +135,25 @@ export interface MessageMeta {
   error?: string;
 }
 
-export function readMeta(messageId: string): MessageMeta {
-  const r = getDb().prepare("SELECT meta FROM messages WHERE id = ?").get(messageId) as { meta: string } | undefined;
+export async function readMeta(messageId: string): Promise<MessageMeta> {
+  const r = await getDb().get<{ meta: string }>("SELECT meta FROM messages WHERE id = ?", [messageId]);
   return parseJson<MessageMeta>(r?.meta, {});
 }
 
 /** The user's words for one message, including any voice-note transcripts. */
-export function userTextWithVoice(m: Message): string {
-  const notes = m.attachments
-    .map((id) => getAsset(id))
-    .filter((a): a is Asset => !!a && !!a.metadata.voiceNote)
+export async function userTextWithVoice(m: Message): Promise<string> {
+  const attached = await getAssets(m.attachments);
+  const notes = attached
+    .filter((a) => !!a.metadata.voiceNote)
     .map((a) => `[Voice note, ${LANGUAGE_NAMES[a.metadata.language ?? ""] ?? a.metadata.language}]: ${a.metadata.transcript}`);
-  const other = m.attachments
-    .map((id) => getAsset(id))
-    .filter((a): a is Asset => !!a && !a.metadata.voiceNote)
+  const other = attached
+    .filter((a) => !a.metadata.voiceNote)
     .map((a) => `${a.id} (${a.mediaType} "${a.originalName}")`);
   return [m.text, ...notes, other.length ? `[Attached: ${other.join(", ")}]` : ""].filter(Boolean).join("\n");
 }
 
 function assistantTextForHistory(m: Message): string {
-  const meta = parseJson<MessageMeta>((getDb().prepare("SELECT meta FROM messages WHERE id = ?").get(m.id) as { meta: string } | undefined)?.meta, {});
+  const meta = m.meta as MessageMeta;
   const notes: string[] = [];
   for (const d of meta.designs ?? []) notes.push(`[Made ${d.kind} "${d.title}" (${d.format}): ${d.assetIds.join(", ")}]`);
   for (const d of meta.deliveries ?? []) notes.push(`[Delivered video "${d.title}"]`);
@@ -163,9 +162,9 @@ function assistantTextForHistory(m: Message): string {
 }
 
 /** Prior turns as plain text, oldest first, excluding the in-progress reply. */
-export function historyTurns(conversationId: string, excludeMessageId: string, limit = 30): { role: "user" | "assistant"; text: string }[] {
-  const msgs = listMessages(conversationId).filter((m) => m.id !== excludeMessageId).slice(-limit);
-  return msgs.map((m) => ({ role: m.role, text: m.role === "user" ? userTextWithVoice(m) : assistantTextForHistory(m) }));
+export async function historyTurns(conversationId: string, excludeMessageId: string, limit = 30): Promise<{ role: "user" | "assistant"; text: string }[]> {
+  const msgs = (await listMessages(conversationId)).filter((m) => m.id !== excludeMessageId).slice(-limit);
+  return Promise.all(msgs.map(async (m) => ({ role: m.role, text: m.role === "user" ? await userTextWithVoice(m) : assistantTextForHistory(m) })));
 }
 
 /** Volatile context: date, brand kit, assets and current version. */
@@ -185,26 +184,25 @@ export function describeKit(items: KitItem[]): string {
   return lines.join("\n");
 }
 
-export function turnContext(conversationId: string): string {
+export async function turnContext(conversationId: string): Promise<string> {
   const nowText = new Intl.DateTimeFormat("en-IN", { dateStyle: "full", timeStyle: "short", timeZone: TZ }).format(new Date());
-  const assets = (getDb().prepare("SELECT id FROM assets WHERE conversation_id = ? ORDER BY created_at").all(conversationId) as { id: string }[])
-    .map((r) => getAsset(r.id))
-    .filter((a): a is Asset => !!a);
-  const kit = getBrandKit();
+  const rows = await getDb().all<{ id: string }>("SELECT id FROM assets WHERE conversation_id = ? ORDER BY created_at", [conversationId]);
+  const assets = await getAssets(rows.map((r) => r.id));
+  const kit = await getBrandKit();
   if (kit.logoAssetId && !assets.some((a) => a.id === kit.logoAssetId)) {
-    const logo = getAsset(kit.logoAssetId);
+    const logo = await getAsset(kit.logoAssetId);
     if (logo) assets.push(logo);
   }
-  const versions = listVersions(conversationId);
+  const [versions, kitItems] = await Promise.all([listVersions(conversationId), listKit()]);
   return [
     `<context>`,
     `Current time: ${nowText} (IST)`,
     ``,
     `Brand kit:`,
-    describeBrandKit(kit),
+    await describeBrandKit(kit),
     ``,
     `The user's kit (their own resources: prefer these over library defaults when they fit):`,
-    describeKit(listKit()),
+    describeKit(kitItems),
     ``,
     `Files in your studio workspace (open them with the tools):`,
     assets.length ? assets.map(assetLine).join("\n") : "(none yet)",

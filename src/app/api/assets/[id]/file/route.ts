@@ -10,7 +10,7 @@ import { getStorage } from "@/lib/storage";
 export async function GET(req: Request, ctx: RouteContext<"/api/assets/[id]/file">) {
   await dynamic();
   const { id } = await ctx.params;
-  const asset = /^ast_[a-f0-9]{32}$/.test(id) ? getAsset(id) : null;
+  const asset = /^ast_[a-f0-9]{32}$/.test(id) ? await getAsset(id) : null;
   const storage = getStorage();
   if (!asset || !storage.exists(asset.storageKey)) return jsonError(404, "File not found.");
   const download = new URL(req.url).searchParams.get("download") === "1";

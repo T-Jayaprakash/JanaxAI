@@ -252,6 +252,8 @@ export function JanuxApp() {
   const assistantEnabled = !!status?.assistant;
   const busyJob = (snapshot?.jobs ?? []).some((j) => !["completed", "failed", "cancelled"].includes(j.state));
   const isEmpty = !loading && messages.length === 0 && !thinking;
+  // Refresh the usage meters whenever a reply starts or finishes.
+  const usage = useUsage(`${messages.length}:${messages.filter((m) => (m.meta as ReplyMeta | null)?.status === "done").length}`);
 
   return (
     <div className="flex h-dvh w-full overflow-hidden bg-bg">

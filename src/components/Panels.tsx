@@ -3,6 +3,7 @@
 import { Film, ImagePlus, Loader2, Search, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, formatBytes, uploadFile, type AppStatus, type BrandKitView, type ConversationSummary, type PublicAsset } from "@/lib/client/api";
+import { UsageList, useUsage } from "./UsageMeters";
 
 function Sheet({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   useEffect(() => {
@@ -130,6 +131,8 @@ export function AccountPanel({ onClose, onDataDeleted }: { onClose: () => void; 
           <p className="mt-1 text-xs text-muted">This private prototype runs on your computer without sign-in. Accounts arrive with authentication.</p>
         </div>
       </section>
+
+      <PlanUsage />
 
       <BrandKitForm />
 
@@ -378,6 +381,19 @@ function BrandKitForm() {
           {message && <span className="text-xs text-muted">{message}</span>}
         </div>
       </form>
+    </section>
+  );
+}
+
+function PlanUsage() {
+  const report = useUsage();
+  return (
+    <section className="mb-6">
+      <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-faint">Plan usage limits{report ? ` · ${report.plan.name}` : ""}</h3>
+      <div className="rounded-xl border border-line bg-card p-4">
+        {report ? <UsageList report={report} /> : <p className="text-sm text-muted">Loading…</p>}
+        {report && !report.enforced && <p className="mt-4 text-[11px] text-faint">Free during the Trichy beta: limits are shown, nothing is blocked or billed.</p>}
+      </div>
     </section>
   );
 }

@@ -121,6 +121,16 @@ describe("studio tools", () => {
     assert.match(del.text, /version 1/);
   });
 
+  it("generates sound effects and (on macOS) voiceovers", async () => {
+    const sfx = await runStudioTool("generate_sound_effect", { type: "whoosh", output: "work/whoosh.wav" }, ctx);
+    assert.ok(!sfx.isError, sfx.text);
+    const vo = await runStudioTool("generate_voiceover", { text: "Welcome to the shop.", language: "en", output: "work/vo.m4a" }, ctx);
+    if (process.platform === "darwin") assert.ok(!vo.isError, vo.text);
+    else assert.equal(vo.isError, true);
+    const wrongExt = await runStudioTool("generate_sound_effect", { type: "pop", output: "work/pop.mp3" }, ctx);
+    assert.equal(wrongExt.isError, true);
+  });
+
   it("rejects bad input without running anything", async () => {
     const out = await runStudioTool("run_ffmpeg", { purpose: "x", args: ["-i", "/etc/hosts", "work/o.mp4"] }, ctx);
     assert.equal(out.isError, true);

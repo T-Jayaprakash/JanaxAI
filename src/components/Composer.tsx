@@ -39,6 +39,8 @@ const noopSubscribe = () => () => {};
 /** Languages for live dictation (Whisper auto-detects when it polishes the text). */
 const DICTATION_LANGS = [
   { code: "ta-IN", label: "தமிழ்" },
+  // Tanglish: live text from Indian English recognition, polished by Whisper in English letters.
+  { code: "tanglish", label: "Tanglish" },
   { code: "en-IN", label: "EN" },
   { code: "hi-IN", label: "हिंदी" },
   { code: "ml-IN", label: "മലയാളം" },
@@ -230,7 +232,7 @@ export function Composer({
     let speech: SpeechRecognitionLike | null = null;
     if (Speech) {
       speech = new Speech();
-      speech.lang = lang;
+      speech.lang = lang === "tanglish" ? "en-IN" : lang;
       speech.interimResults = true;
       speech.continuous = true;
       speech.onresult = (e) => {
@@ -271,7 +273,7 @@ export function Composer({
       }
       setPolishing(true);
       try {
-        const res = await fetch("/api/transcribe", { method: "POST", headers: { "Content-Type": type }, body: blob });
+        const res = await fetch(`/api/transcribe${lang === "tanglish" ? "?style=tanglish" : ""}`, { method: "POST", headers: { "Content-Type": type }, body: blob });
         const body = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
         if (res.ok && body.text) setText(base + body.text);
         else if (!heard.trim()) setNotice(body.error ?? "I couldn't catch that. Try again a little closer to the mic.");

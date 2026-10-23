@@ -14,6 +14,7 @@ import type { EditSpec } from "../spec";
 import { freeDiskBytes, getStorage } from "../storage";
 import { addActivity, finishActivity, patchMeta, updateActivity } from "../agent/meta";
 import { analyzeAudio } from "./audio";
+import { makeSoundEffect, makeVoiceover, SFX_DEFAULT_DURATION, SFX_TYPES } from "./audioGen";
 import { checkFfmpegArgs } from "./ffmpegGuard";
 import { inputName, resolveInWorkspace, syncWorkspace, workspaceDir } from "./workspace";
 import { runProcess } from "../media/ffmpeg";
@@ -434,6 +435,57 @@ const deliverTool = tool({
   },
 });
 
+const voiceoverTool = tool({
+  name: "generate_voiceover",
+  description:
+    "Turn a script into a spoken voiceover audio file (.m4a) with this computer's voices: Tamil (Vani), Indian English (Rishi, Tara, Aman), Hindi (Lekha), Telugu (Geeta), Kannada (Soumya), Bengali (Piya). Write Tamil scripts in Tamil script (English words may stay in English); romanized Tanglish is read badly. Returns the duration so you can time the edit. Voices are clear but synthetic: offer the user the option to record their own voice instead.",
+  schema: z.object({
+    text: z.string().min(1).max(5000),
+    language: z.enum(["ta", "en", "hi", "te", "kn", "bn"]),
+    voice: z.string().max(20).optional(),
+    speed: z.number().min(0.6).max(1.6).optional().describe("1 = normal; 1.1 for energetic reels"),
+    output: RelPath.describe("work/....m4a"),
+  }),
+  label: (i) => `Recording voiceover (${i.language === "ta" ? "Tamil" : i.language === "en" ? "English" : i.language})`,
+  async run(input, ctx) {
+    syncWorkspace(ctx.conversationId);
+    if (!input.output.endsWith(".m4a")) return { text: "Voiceovers are saved as .m4a.", isError: true };
+    const out = resolveInWorkspace(ctx.conversationId, input.output, { writable: true });
+    try {
+      await makeVoiceover({
+        text: input.text,
+        language: input.language,
+        voice: input.voice,
+        speed: input.speed ?? 1,
+        output: out,
+        workDir: path.dirname(resolveInWorkspace(ctx.conversationId, "cache/x")),
+      });
+    } catch (err) {
+      return { text: err instanceof MediaError ? err.userMessage : String(err), isError: true };
+    }
+    return { text: `Voiceover ready.\n${(await describeOutputs(ctx.conversationId, [input.output])).join("\n")}` };
+  },
+});
+
+const sfxTool = tool({
+  name: "generate_sound_effect",
+  description: `Make a sound effect (.wav) to place on a cut, a text pop or a reveal: ${SFX_TYPES.join(", ")}. Mix it in with run_ffmpeg (adelay to position it, amix normalize=0). Keep effects subtle under speech.`,
+  schema: z.object({
+    type: z.enum(SFX_TYPES),
+    duration: z.number().min(0.03).max(8).optional(),
+    volume: z.number().min(0.05).max(2).optional(),
+    output: RelPath.describe("work/....wav"),
+  }),
+  label: (i) => `Making a ${i.type} sound effect`,
+  async run(input, ctx) {
+    syncWorkspace(ctx.conversationId);
+    if (!input.output.endsWith(".wav")) return { text: "Sound effects are saved as .wav.", isError: true };
+    const out = resolveInWorkspace(ctx.conversationId, input.output, { writable: true });
+    await makeSoundEffect(input.type, input.duration ?? SFX_DEFAULT_DURATION[input.type], out, input.volume ?? 1);
+    return { text: `Sound effect ready: ${input.output} (${(input.duration ?? SFX_DEFAULT_DURATION[input.type]).toFixed(2)}s).` };
+  },
+});
+
 const brandTool = tool({
   name: "update_brand_kit",
   description: "Save brand details the user tells you (business/channel name, tagline, phone, WhatsApp, email, website, Instagram, address, colours, logo asset id, notes) for reuse in intros, end cards and captions.",
@@ -454,6 +506,8 @@ export const STUDIO_TOOLS = [
   writeFileTool,
   runFfmpegTool,
   renderAnimationTool,
+  voiceoverTool,
+  sfxTool,
   deliverTool,
   brandTool,
 ] as StudioTool<z.ZodTypeAny>[];

@@ -2,6 +2,7 @@
 
 import { Check, ChevronRight, Loader2, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { Markdown } from "./Markdown";
 
 export interface TimelineStep {
@@ -44,7 +45,7 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 
 /** "Watched 3 clips, listened to 1 file, made 2 edits" */
 function summarize(steps: TimelineStep[]): string {
-  const counts = { watch: 0, look: 0, listen: 0, beat: 0, animate: 0, deliver: 0, other: 0 };
+  const counts = { watch: 0, look: 0, listen: 0, beat: 0, animate: 0, voice: 0, sfx: 0, deliver: 0, other: 0 };
   for (const s of steps) {
     const l = s.label.toLowerCase();
     if (l.startsWith("watching")) counts.watch++;
@@ -52,6 +53,8 @@ function summarize(steps: TimelineStep[]): string {
     else if (l.startsWith("listening")) counts.listen++;
     else if (l.startsWith("finding the beat")) counts.beat++;
     else if (l.startsWith("animating")) counts.animate++;
+    else if (l.startsWith("recording voiceover")) counts.voice++;
+    else if (l.startsWith("making a") && l.includes("sound effect")) counts.sfx++;
     else if (l.startsWith("delivering")) counts.deliver++;
     else counts.other++;
   }
@@ -62,6 +65,8 @@ function summarize(steps: TimelineStep[]): string {
   if (counts.look) parts.push(`checked ${plural(counts.look, "set of frames", "sets of frames")}`);
   if (counts.other) parts.push(`made ${plural(counts.other, "edit", "edits")}`);
   if (counts.animate) parts.push(`animated ${plural(counts.animate, "graphic", "graphics")}`);
+  if (counts.voice) parts.push(`recorded ${plural(counts.voice, "voiceover", "voiceovers")}`);
+  if (counts.sfx) parts.push(`made ${plural(counts.sfx, "sound effect", "sound effects")}`);
   if (counts.deliver) parts.push("delivered the video");
   const text = parts.join(", ");
   return text.charAt(0).toUpperCase() + text.slice(1);
@@ -177,13 +182,16 @@ function Lightbox({ src, onClose }: { src: string; onClose: () => void }) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-  return (
-    <div role="dialog" aria-modal="true" aria-label="Preview" className="fixed inset-0 z-50 grid place-items-center bg-black/85 p-6" onClick={onClose}>
+  // Rendered into <body>: an animated (transformed) parent would otherwise
+  // trap a fixed overlay inside the message instead of the whole screen.
+  return createPortal(
+    <div role="dialog" aria-modal="true" aria-label="Preview" className="fixed inset-0 z-[60] grid place-items-center bg-black/90 p-4 sm:p-8" onClick={onClose}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={src} alt="What the editor looked at" className="max-h-full max-w-full rounded-xl" />
-      <button type="button" aria-label="Close" onClick={onClose} className="absolute right-5 top-5 grid h-10 w-10 place-items-center rounded-full border border-line-strong text-ink">
+      <img src={src} alt="What the editor looked at" className="max-h-full max-w-full rounded-xl object-contain" onClick={(e) => e.stopPropagation()} />
+      <button type="button" aria-label="Close" onClick={onClose} className="absolute right-5 top-5 grid h-10 w-10 place-items-center rounded-full border border-line-strong bg-bg/60 text-ink">
         <X size={18} />
       </button>
-    </div>
+    </div>,
+    document.body,
   );
 }

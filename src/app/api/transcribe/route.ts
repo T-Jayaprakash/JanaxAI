@@ -34,7 +34,8 @@ export async function POST(req: Request) {
       out.write(chunk);
     }
     await new Promise<void>((resolve, reject) => out.end((err?: Error | null) => (err ? reject(err) : resolve())));
-    const t = await transcribe(file, path.join(dir, "work"));
+    const style = new URL(req.url).searchParams.get("style") === "tanglish" ? "tanglish" : "auto";
+    const t = await transcribe(file, path.join(dir, "work"), style);
     return Response.json({ text: t.text, language: t.language });
   } catch (err) {
     if (err instanceof MediaError) return jsonError(422, err.userMessage);

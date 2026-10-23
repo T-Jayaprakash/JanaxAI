@@ -33,7 +33,14 @@ export const LANGUAGE_NAMES: Record<string, string> = {
   bn: "Bengali", gu: "Gujarati", pa: "Punjabi", ur: "Urdu", ar: "Arabic", fr: "French", es: "Spanish", de: "German",
 };
 
-export async function transcribe(audioPath: string, workDir: string): Promise<Transcript> {
+/** Steers Whisper to write Tamil speech in English letters (Tanglish). */
+const TANGLISH_HINT =
+  "Tanglish, Tamil written in English letters: Intha video-va reel-a maathu. Enna panra? Seri, adhu nalla irukku. " +
+  "Konjam fast-a pannu. Music kammi pannu. Caption podu. Venam. Kadaisila en number podu.";
+
+export type TranscribeStyle = "auto" | "tanglish";
+
+export async function transcribe(audioPath: string, workDir: string, style: TranscribeStyle = "auto"): Promise<Transcript> {
   const cfg = speechConfig();
   if (!fs.existsSync(cfg.model)) {
     throw new MediaError("Voice notes need the speech model. Run: npm run setup:speech", "whisper model missing", "speech_unavailable");
@@ -44,7 +51,8 @@ export async function transcribe(audioPath: string, workDir: string): Promise<Tr
   // whisper.cpp expects 16 kHz mono PCM.
   await ffmpeg(["-i", audioPath, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "-t", "600", wav], { timeoutMs: 60_000 });
   try {
-    await runProcess(cfg.cli, ["-m", cfg.model, "-l", "auto", "-f", wav, "-oj", "-of", base, "-np", "-t", "4"], { timeoutMs: 180_000 });
+    const lang = style === "tanglish" ? ["-l", "en", "--prompt", TANGLISH_HINT] : ["-l", "auto"];
+    await runProcess(cfg.cli, ["-m", cfg.model, ...lang, "-f", wav, "-oj", "-of", base, "-np", "-t", "4"], { timeoutMs: 180_000 });
   } catch (err) {
     if (err instanceof MediaError && err.code === "ffmpeg_missing") {
       throw new MediaError("Speech recognition (whisper.cpp) is not installed. Run: npm run setup:speech", err.diagnostic, "speech_unavailable");
@@ -56,5 +64,5 @@ export async function transcribe(audioPath: string, workDir: string): Promise<Tr
     transcription?: { text?: string }[];
   };
   const text = (raw.transcription ?? []).map((s) => s.text ?? "").join("").replace(/\s+/g, " ").trim();
-  return { text, language: raw.result?.language ?? "unknown", provider: "whisper.cpp (local)" };
+  return { text, language: style === "tanglish" ? "ta-Latn" : (raw.result?.language ?? "unknown"), provider: "whisper.cpp (local)" };
 }

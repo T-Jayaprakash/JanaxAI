@@ -41,7 +41,13 @@ export function claimNextAgentRun(): AgentRun | null {
   const r = getDb()
     .prepare(
       `UPDATE agent_runs SET state = 'running', attempts = attempts + 1, updated_at = ?
-       WHERE id = (SELECT id FROM agent_runs WHERE state = 'queued' ORDER BY created_at LIMIT 1) AND state = 'queued'
+       WHERE id = (
+         SELECT q.id FROM agent_runs q
+         WHERE q.state = 'queued'
+           -- One reply at a time per conversation: a follow-up waits for the current reply.
+           AND NOT EXISTS (SELECT 1 FROM agent_runs r WHERE r.conversation_id = q.conversation_id AND r.state = 'running')
+         ORDER BY q.created_at LIMIT 1
+       ) AND state = 'queued'
        RETURNING *`,
     )
     .get(t) as Row | undefined;

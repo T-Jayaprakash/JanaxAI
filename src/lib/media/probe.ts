@@ -73,6 +73,24 @@ export async function probe(filePath: string): Promise<ProbeResult> {
   };
 }
 
+/**
+ * Browser recordings (MediaRecorder WebM, some MP4s) are written as a live
+ * stream and don't store their length. Decode the file once and read the
+ * last timestamp FFmpeg reports.
+ */
+export async function measureDuration(filePath: string, kind: "audio" | "video"): Promise<number | null> {
+  try {
+    const { stderrTail } = await ffmpeg(["-i", filePath, ...(kind === "audio" ? ["-vn"] : ["-an"]), "-f", "null", "-"], { timeoutMs: 120_000 });
+    const times = [...stderrTail.matchAll(/time=(\d+):(\d+):(\d+(?:\.\d+)?)/g)];
+    const last = times.at(-1);
+    if (!last) return null;
+    const seconds = Number(last[1]) * 3600 + Number(last[2]) * 60 + Number(last[3]);
+    return seconds > 0 ? seconds : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Writes a JPEG thumbnail roughly 10% into the clip (or the image itself). */
 export async function makeThumbnail(input: string, output: string, duration: number | null) {
   const at = duration && duration > 1 ? Math.min(duration * 0.1, 3) : 0;

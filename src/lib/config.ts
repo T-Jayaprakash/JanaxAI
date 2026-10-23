@@ -19,7 +19,7 @@ export function getConfig() {
     ffmpegPath: process.env.FFMPEG_PATH || "ffmpeg",
     ffprobePath: process.env.FFPROBE_PATH || "ffprobe",
     maxUploadBytes: num("JANUX_MAX_UPLOAD_MB", 300) * 1024 * 1024,
-    maxFilesPerMessage: num("JANUX_MAX_FILES_PER_MESSAGE", 10),
+    maxFilesPerMessage: num("JANUX_MAX_FILES_PER_MESSAGE", 50),
     maxClipSeconds: num("JANUX_MAX_CLIP_SECONDS", 15 * 60),
     maxOutputSeconds: num("JANUX_MAX_OUTPUT_SECONDS", 180),
     minFreeDiskBytes: num("JANUX_MIN_FREE_DISK_MB", 1024) * 1024 * 1024,

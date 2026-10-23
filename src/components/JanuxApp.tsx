@@ -376,7 +376,7 @@ export function JanuxApp() {
                     {m.role === "user" ? (
                       <UserMessage text={m.text} attachments={m.attachments.map((a) => snapshot!.assets[a]).filter(Boolean)} />
                     ) : (
-                      <AssistantMessage text={m.text} streaming={streaming} pending={meta.status === "pending" || (streaming && !m.text)}>
+                      <AssistantMessage text={m.text} streaming={streaming} pending={meta.status === "pending" || (streaming && !m.text)} queued={meta.status === "pending" && messages.some((x) => x.id !== m.id && (x.meta as ReplyMeta)?.status === "streaming")}>
                         {meta.activity && meta.activity.length > 0 && <ActivityList items={meta.activity} />}
                         {meta.status === "error" && meta.error && (
                           <p role="alert" className="mt-3 rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-sm">
@@ -564,7 +564,19 @@ const LANGUAGE_NAMES: Record<string, string> = {
   ta: "Tamil", ml: "Malayalam", te: "Telugu", kn: "Kannada", hi: "Hindi", en: "English", mr: "Marathi", bn: "Bengali", gu: "Gujarati", ur: "Urdu",
 };
 
-function AssistantMessage({ text, streaming, pending, children }: { text: string; streaming?: boolean; pending?: boolean; children?: React.ReactNode }) {
+function AssistantMessage({
+  text,
+  streaming,
+  pending,
+  queued,
+  children,
+}: {
+  text: string;
+  streaming?: boolean;
+  pending?: boolean;
+  queued?: boolean;
+  children?: React.ReactNode;
+}) {
   return (
     <div className="flex gap-3">
       <div className="mt-0.5 shrink-0">
@@ -573,7 +585,7 @@ function AssistantMessage({ text, streaming, pending, children }: { text: string
       <div className="min-w-0 flex-1">
         {pending && !text ? (
           <p className="flex items-center gap-2 text-sm text-muted">
-            <Sparkles size={14} className="animate-pulse text-accent" /> Thinking…
+            <Sparkles size={14} className="animate-pulse text-accent" /> {queued ? "Waiting for the previous reply to finish…" : "Thinking…"}
           </p>
         ) : (
           text && (

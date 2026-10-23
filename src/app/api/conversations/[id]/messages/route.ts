@@ -4,7 +4,7 @@ import { jsonError, rateLimit } from "@/lib/http";
 
 const Body = z.object({
   text: z.string().max(4000).default(""),
-  attachmentIds: z.array(z.string().regex(/^ast_[a-f0-9]{32}$/)).max(50).default([]),
+  attachmentIds: z.array(z.string().regex(/^ast_[a-f0-9]{32}$/)).max(200).default([]),
 });
 
 export async function POST(req: Request, ctx: RouteContext<"/api/conversations/[id]/messages">) {

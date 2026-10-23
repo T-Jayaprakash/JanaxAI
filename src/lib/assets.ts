@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { ALLOWED_MIME, AUDIO_EXTENSIONS, getConfig, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS } from "./config";
 import { getDb, newId, now, parseJson } from "./db";
 import { ffmpeg, MediaError } from "./media/ffmpeg";
-import { makeThumbnail, probe, type ProbeResult } from "./media/probe";
+import { makeThumbnail, measureDuration, probe, type ProbeResult } from "./media/probe";
 import { transcribe } from "./speech/transcribe";
 import { freeDiskBytes, getStorage } from "./storage";
 
@@ -160,6 +160,9 @@ export async function ingestUpload(input: {
     if (size === 0) throw new UploadError(400, "The file is empty.");
 
     const info = await probe(filePath);
+    if (!info.duration && (mediaType === "audio" || mediaType === "video")) {
+      info.duration = await measureDuration(filePath, mediaType === "audio" ? "audio" : "video");
+    }
     if (mediaType === "audio") return await finishAudio(info);
     if (!info.hasVideo) throw new UploadError(422, "No video or image content was found in this file.");
     if (mediaType === "video") {

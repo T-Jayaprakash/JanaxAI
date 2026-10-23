@@ -111,13 +111,20 @@ export function Composer({
       entries.forEach(({ item }) => patch(item.localId, { status: "error", error: "Couldn't start a conversation." }));
       return;
     }
-    for (const { file, item, purpose } of entries) {
-      const up = uploadFile(file, conversationId, (p) => patch(item.localId, { progress: p, status: p >= 1 ? "processing" : "uploading" }), purpose);
-      patch(item.localId, { abort: up.abort });
-      up.promise
-        .then((asset) => patch(item.localId, { status: "ready", asset, duration: asset.duration, progress: 1, abort: undefined }))
-        .catch((err: Error) => patch(item.localId, { status: "error", error: err.message, abort: undefined }));
-    }
+    // Upload a few at a time so dozens of clips don't overload the machine.
+    const queue = [...entries];
+    const worker = async () => {
+      for (let next = queue.shift(); next; next = queue.shift()) {
+        const { file, item, purpose } = next;
+        if (!itemsRef.current.some((i) => i.localId === item.localId)) continue; // removed while waiting
+        const up = uploadFile(file, conversationId, (p) => patch(item.localId, { progress: p, status: p >= 1 ? "processing" : "uploading" }), purpose);
+        patch(item.localId, { abort: up.abort });
+        await up.promise
+          .then((asset) => patch(item.localId, { status: "ready", asset, duration: asset.duration, progress: 1, abort: undefined }))
+          .catch((err: Error) => patch(item.localId, { status: "error", error: err.message, abort: undefined }));
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, entries.length) }, worker));
   };
 
   const addFiles = async (files: FileList | File[]) => {

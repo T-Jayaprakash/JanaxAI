@@ -8,6 +8,7 @@ import { killActiveCliProcesses } from "../src/lib/agent/backends/cli";
 import { claimNextJob, recoverInterruptedJobs, setWorkerHeartbeat } from "../src/lib/jobs";
 import { processJob } from "../src/lib/render/pipeline";
 import { cleanupOrphanChromes, closeBrowser } from "../src/lib/graphics/render";
+import { sweepWorkspaces } from "../src/lib/studio/cleanup";
 
 let stopping = false;
 
@@ -21,6 +22,13 @@ async function main() {
   if (interruptedReplies) console.log(`[worker] marked ${interruptedReplies} interrupted assistant replies as failed`);
   setWorkerHeartbeat();
   const beat = setInterval(setWorkerHeartbeat, 2000);
+  // Intermediate renders of idle conversations are cleared so disks don't fill up.
+  const sweep = () =>
+    sweepWorkspaces()
+      .then((r) => r.freed && console.log(`[worker] cleared ${(r.freed / 1048576).toFixed(0)} MB of old intermediate renders from ${r.swept} projects`))
+      .catch((err) => console.error("[worker] workspace sweep failed", err));
+  void sweep();
+  const sweeper = setInterval(sweep, 15 * 60_000);
   const backend = selectBackend();
   console.log(`[worker] ready · assistant: ${backend ? backend.label : "none (keyword planner only)"}`);
   void agentLoop();
@@ -37,6 +45,7 @@ async function main() {
     console.log(`[worker] job ${job.id} finished in ${((Date.now() - t) / 1000).toFixed(1)}s`);
   }
   clearInterval(beat);
+  clearInterval(sweeper);
 }
 
 /** Assistant replies run alongside renders so chatting never waits for a render. */

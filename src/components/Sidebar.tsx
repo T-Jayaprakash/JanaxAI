@@ -1,6 +1,7 @@
 "use client";
 
 import { Check, FolderOpen, MessageSquarePlus, PanelLeftClose, Pencil, Trash2, UserRound, X } from "lucide-react";
+import Link from "next/link";
 import { useState } from "react";
 import type { ConversationSummary } from "@/lib/client/api";
 import { Wordmark } from "./Logo";
@@ -29,7 +30,9 @@ export function Sidebar({
   return (
     <nav aria-label="Conversations" className="flex h-full w-[272px] flex-col border-r border-line bg-bg-2">
       <div className="flex items-center justify-between px-4 pb-3 pt-4">
-        <Wordmark />
+        <Link href="/" aria-label="JANUXAI home">
+          <Wordmark />
+        </Link>
         <button onClick={onClose} aria-label="Close sidebar" className="grid h-8 w-8 place-items-center rounded-lg text-muted hover:bg-card hover:text-ink">
           <PanelLeftClose size={17} />
         </button>

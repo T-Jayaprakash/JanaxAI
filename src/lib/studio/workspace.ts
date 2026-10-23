@@ -24,7 +24,7 @@ export function inputName(a: Asset): string {
 /** Links every asset of the conversation (plus the brand logo) into in/. */
 export function syncWorkspace(conversationId: string, extraAssetIds: string[] = []): { dir: string; assets: Asset[] } {
   const dir = workspaceDir(conversationId);
-  for (const sub of ["in", "work", "cache"]) fs.mkdirSync(path.join(dir, sub), { recursive: true });
+  for (const sub of ["in", "work", "cache"]) fs.mkdirSync(path.join(/*turbopackIgnore: true*/ dir, sub), { recursive: true });
   const ids = (getDb().prepare("SELECT id FROM assets WHERE conversation_id = ? ORDER BY created_at").all(conversationId) as { id: string }[]).map((r) => r.id);
   const storage = getStorage();
   const assets: Asset[] = [];
@@ -36,7 +36,7 @@ export function syncWorkspace(conversationId: string, extraAssetIds: string[] = 
     try {
       fs.chmodSync(target, 0o444);
     } catch {}
-    const link = path.join(dir, inputName(a));
+    const link = path.join(/*turbopackIgnore: true*/ dir, inputName(a));
     if (!fs.existsSync(link)) fs.symlinkSync(target, link);
     assets.push(a);
   }
@@ -52,7 +52,7 @@ export function resolveInWorkspace(conversationId: string, rel: string, opts: { 
     throw new Error(`Path "${rel}" must be inside the workspace, like in/<file> or work/<file>.`);
   }
   if (opts.writable && !clean.startsWith("work/")) throw new Error("Outputs must be written under work/.");
-  const abs = path.join(workspaceDir(conversationId), clean);
+  const abs = path.join(/*turbopackIgnore: true*/ workspaceDir(conversationId), clean);
   if (opts.mustExist && !fs.existsSync(abs)) throw new Error(`File "${rel}" doesn't exist.`);
   return abs;
 }

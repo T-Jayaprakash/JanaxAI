@@ -59,7 +59,7 @@ export function ProjectsPanel({
         />
       </div>
       <label className="mb-4 flex items-center gap-2 text-xs text-muted">
-        <input type="checkbox" checked={onlyVideos} onChange={(e) => setOnlyVideos(e.target.checked)} className="accent-[#21F36A]" />
+        <input type="checkbox" checked={onlyVideos} onChange={(e) => setOnlyVideos(e.target.checked)} className="accent-[#F2A33A]" />
         Only projects with finished videos
       </label>
       {shown.length === 0 && <p className="text-sm text-faint">No projects match.</p>}
@@ -344,7 +344,7 @@ function BrandKitForm() {
               <span className="mt-1 flex items-center gap-2">
                 <input
                   type="color"
-                  value={brand[k] || "#21f36a"}
+                  value={brand[k] || "#f2a33a"}
                   onChange={(e) => set(k, e.target.value)}
                   className="h-8 w-10 cursor-pointer rounded border border-line bg-transparent"
                   aria-label={k === "primaryColor" ? "Primary colour" : "Secondary colour"}

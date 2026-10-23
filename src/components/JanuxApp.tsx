@@ -30,6 +30,7 @@ import {
   type PublicAsset,
   type PublicJob,
 } from "@/lib/client/api";
+import { takeHandoff } from "@/lib/client/handoff";
 import { DesignGallery } from "./DesignGallery";
 import { Markdown } from "./Markdown";
 import { Composer, type ComposerHandle } from "./Composer";
@@ -93,7 +94,19 @@ export function JanuxApp() {
       },
       () => undefined,
     );
-    const id = new URL(window.location.href).searchParams.get("c");
+    // A prompt or files started on the landing page.
+    const url = new URL(window.location.href);
+    const handoff = takeHandoff();
+    const prompt = handoff?.prompt || url.searchParams.get("prompt");
+    if (prompt || handoff?.files.length) {
+      url.searchParams.delete("prompt");
+      window.history.replaceState(null, "", url);
+      requestAnimationFrame(() => {
+        if (prompt) composerRef.current?.setText(prompt);
+        if (handoff?.files.length) composerRef.current?.addFiles(handoff.files);
+      });
+    }
+    const id = url.searchParams.get("c");
     const restore = id ? api.getConversation(id).then(setSnapshot, () => setUrlConversation(null)) : Promise.resolve();
     restore.finally(() => setLoading(false));
   }, [refreshList]);

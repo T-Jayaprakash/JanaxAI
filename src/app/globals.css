@@ -2,21 +2,23 @@
 
 /* JANUXAI design tokens. Change brand colors here only. */
 @theme {
-  --color-bg: #050807;
-  --color-bg-2: #0b1210;
-  --color-card: #101a16;
-  --color-card-2: #15221d;
-  --color-line: #1e2d27;
-  --color-line-strong: #2a3d35;
-  --color-accent: #21f36a;
-  --color-accent-2: #00c853;
-  --color-ink: #f5f7f5;
-  --color-muted: #a5b2aa;
-  --color-faint: #6d7c74;
-  --color-danger: #ff6b6b;
-  --color-warn: #f5c451;
+  /* Warm black, ivory and marigold: festive, calm, premium. */
+  --color-bg: #0f0d0b;
+  --color-bg-2: #15120f;
+  --color-card: #1b1714;
+  --color-card-2: #241f1a;
+  --color-line: #2e2823;
+  --color-line-strong: #40372f;
+  --color-accent: #f2a33a;
+  --color-accent-2: #ffbb5e;
+  --color-ink: #f5efe6;
+  --color-muted: #b3a99c;
+  --color-faint: #7d7368;
+  --color-danger: #f0705e;
+  --color-warn: #e9c46a;
   --font-sans: var(--font-geist-sans), "Noto Sans Tamil", "Tamil Sangam MN", system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --font-display: var(--font-fraunces), Georgia, "Times New Roman", serif;
 }
 
 :root {
@@ -182,4 +184,27 @@ body {
 .janux-md p,
 .janux-md li {
   white-space: pre-line;
+}
+
+/* Marketing: kolam-inspired dot field with a marigold glow. */
+.kolam-bg {
+  background-image:
+    radial-gradient(60% 50% at 50% 0%, color-mix(in srgb, var(--color-accent) 16%, transparent) 0%, transparent 70%),
+    radial-gradient(circle at center, color-mix(in srgb, var(--color-ink) 9%, transparent) 1.2px, transparent 1.6px);
+  background-size: 100% 100%, 28px 28px;
+}
+.text-balance {
+  text-wrap: balance;
+}
+@keyframes float-slow {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+.animate-float {
+  animation: float-slow 6s ease-in-out infinite;
 }

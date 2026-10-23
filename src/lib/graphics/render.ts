@@ -1,5 +1,6 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import puppeteer, { type Browser, type Page } from "puppeteer-core";
 import { getConfig } from "../config";
 import { CancelledError, MediaError } from "../media/ffmpeg";
@@ -26,7 +27,16 @@ export function chromePath(): string | null {
 
 const ALLOWED_HOSTS = new Set(["fonts.googleapis.com", "fonts.gstatic.com"]);
 
-type GlobalWithBrowser = typeof globalThis & { __januxBrowser?: Promise<Browser>; __januxBrowserIdle?: ReturnType<typeof setTimeout> };
+type GlobalWithBrowser = typeof globalThis & {
+  __januxBrowser?: Promise<Browser>;
+  __januxBrowserIdle?: ReturnType<typeof setTimeout>;
+  __januxActiveRenders?: number;
+};
+
+/** Chrome profiles live under the data folder so leftovers can be recognised and cleaned up. */
+export function chromeProfileRoot(): string {
+  return path.join(/*turbopackIgnore: true*/ getConfig().dataDir, "tmp", "chrome");
+}
 
 async function getBrowser(): Promise<Browser> {
   const g = globalThis as GlobalWithBrowser;
@@ -38,31 +48,58 @@ async function getBrowser(): Promise<Browser> {
   if (!executablePath) {
     throw new MediaError("Design rendering needs Google Chrome or Chromium installed (or CHROME_PATH set).", "chrome missing", "chrome_missing");
   }
+  const userDataDir = path.join(chromeProfileRoot(), `profile-${process.pid}-${Date.now()}`);
+  fs.mkdirSync(userDataDir, { recursive: true });
   g.__januxBrowser = puppeteer.launch({
     executablePath,
     headless: true,
+    userDataDir,
     args: ["--disable-gpu", "--hide-scrollbars", "--mute-audio", "--font-render-hinting=none", "--disable-dev-shm-usage"],
   });
-  return g.__januxBrowser;
+  const browser = await g.__januxBrowser;
+  // Remove the temporary profile once Chrome has fully exited. Never throw from here:
+  // an exception in this event handler would crash the whole process.
+  browser.on("disconnected", () => {
+    setTimeout(() => {
+      try {
+        fs.rmSync(userDataDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+      } catch {}
+    }, 1000).unref();
+  });
+  return browser;
 }
 
 export async function closeBrowser() {
   const g = globalThis as GlobalWithBrowser;
+  if (g.__januxBrowserIdle) clearTimeout(g.__januxBrowserIdle);
   const b = await g.__januxBrowser?.catch(() => null);
   g.__januxBrowser = undefined;
   await b?.close().catch(() => undefined);
 }
 
-/** Closes Chrome after a quiet minute so it doesn't hold memory. */
-function scheduleIdleClose() {
+/** Marks a render as running so the idle timer can't close Chrome under it. */
+function beginRender() {
   const g = globalThis as GlobalWithBrowser;
   if (g.__januxBrowserIdle) clearTimeout(g.__januxBrowserIdle);
-  g.__januxBrowserIdle = setTimeout(async () => {
-    const b = await g.__januxBrowser?.catch(() => null);
-    g.__januxBrowser = undefined;
-    await b?.close().catch(() => undefined);
+  g.__januxActiveRenders = (g.__januxActiveRenders ?? 0) + 1;
+}
+
+/** Closes Chrome after a quiet minute with no renders, so it doesn't hold memory. */
+function endRender() {
+  const g = globalThis as GlobalWithBrowser;
+  g.__januxActiveRenders = Math.max(0, (g.__januxActiveRenders ?? 1) - 1);
+  if (g.__januxActiveRenders > 0) return;
+  if (g.__januxBrowserIdle) clearTimeout(g.__januxBrowserIdle);
+  g.__januxBrowserIdle = setTimeout(() => {
+    if ((g.__januxActiveRenders ?? 0) === 0) void closeBrowser();
   }, 60_000);
   g.__januxBrowserIdle.unref?.();
+}
+
+/** Chrome went away mid-render (crash, out of memory): worth one retry with a fresh browser. */
+function isBrowserCrash(err: unknown): boolean {
+  const msg = err instanceof Error ? `${err.name} ${err.message}` : String(err);
+  return /Target closed|TargetCloseError|Session closed|Protocol error|detached|crash|disconnected|Connection closed/i.test(msg);
 }
 
 async function openPage(html: string, width: number, height: number, transparent = false): Promise<Page> {
@@ -97,13 +134,17 @@ function wrapHtml(html: string, width: number, height: number, transparent = fal
 }
 
 export async function renderHtmlToPng(html: string, width: number, height: number, outPath: string): Promise<void> {
-  const page = await openPage(html, width, height);
+  beginRender();
   try {
-    await pauseAnimationsAt(page, 1e7); // show the final state of any entrance animation
-    await page.screenshot({ path: outPath as `${string}.png`, type: "png", clip: { x: 0, y: 0, width, height } });
+    const page = await openPage(html, width, height);
+    try {
+      await pauseAnimationsAt(page, 1e7); // show the final state of any entrance animation
+      await page.screenshot({ path: outPath as `${string}.png`, type: "png", clip: { x: 0, y: 0, width, height } });
+    } finally {
+      await page.close().catch(() => undefined);
+    }
   } finally {
-    await page.close().catch(() => undefined);
-    scheduleIdleClose();
+    endRender();
   }
 }
 
@@ -125,7 +166,7 @@ async function pauseAnimationsAt(page: Page, ms: number) {
  * Renders an animated HTML composition frame by frame (time is seeked, not
  * played, so output is deterministic) and encodes it to H.264 MP4.
  */
-export async function renderHtmlToVideo(opts: {
+export interface VideoRenderOptions {
   html: string;
   width: number;
   height: number;
@@ -136,10 +177,30 @@ export async function renderHtmlToVideo(opts: {
   transparent?: boolean;
   onProgress?: (fraction: number) => void;
   shouldCancel?: () => boolean;
-}): Promise<void> {
+}
+
+export async function renderHtmlToVideo(opts: VideoRenderOptions): Promise<void> {
+  beginRender();
+  try {
+    try {
+      await renderOnce(opts);
+    } catch (err) {
+      if (err instanceof CancelledError || !isBrowserCrash(err)) throw err;
+      // Start over once with a fresh Chrome.
+      await closeBrowser();
+      await renderOnce(opts);
+    }
+  } finally {
+    endRender();
+  }
+}
+
+async function renderOnce(opts: VideoRenderOptions): Promise<void> {
   const { width, height, fps, duration } = opts;
   const frames = Math.max(1, Math.round(duration * fps));
   const page = await openPage(opts.html, width, height, opts.transparent);
+  // Opaque video uses JPEG frames (much faster to capture); overlays need PNG for alpha.
+  const frameCodec = opts.transparent ? "png" : "mjpeg";
   const encode = opts.transparent
     ? ["-map", "0:v", "-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le", "-vendor", "apl0"]
     : [
@@ -152,7 +213,7 @@ export async function renderHtmlToVideo(opts: {
     getConfig().ffmpegPath,
     [
       "-hide_banner", "-loglevel", "error", "-y",
-      "-f", "image2pipe", "-framerate", String(fps), "-c:v", "png", "-i", "-",
+      "-f", "image2pipe", "-framerate", String(fps), "-c:v", frameCodec, "-i", "-",
       ...encode,
       opts.outPath,
     ],
@@ -160,14 +221,18 @@ export async function renderHtmlToVideo(opts: {
   );
   let stderr = "";
   ff.stderr.on("data", (d: Buffer) => (stderr = (stderr + d.toString()).slice(-4000)));
+  ff.stdin.on("error", () => undefined); // reported through the exit code instead
   const exited = new Promise<number>((resolve) => ff.on("close", (code) => resolve(code ?? 1)));
-  const deadline = Date.now() + getConfig().ffmpegTimeoutMs;
+  // Heavy compositions (blur, glass, 3D) can take ~1s per frame at 1080p.
+  const deadline = Date.now() + Math.min(40 * 60_000, Math.max(getConfig().ffmpegTimeoutMs, frames * 1500));
   try {
     for (let i = 0; i < frames; i++) {
       if (opts.shouldCancel?.()) throw new CancelledError();
-      if (Date.now() > deadline) throw new MediaError("The animation took too long to render.", "frame timeout", "timeout");
+      if (Date.now() > deadline) throw new MediaError("The animation took too long to render. Try a shorter or simpler animation.", "frame timeout", "timeout");
       await pauseAnimationsAt(page, (i / fps) * 1000);
-      const buf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width, height }, optimizeForSpeed: true, omitBackground: !!opts.transparent });
+      const buf = opts.transparent
+        ? await page.screenshot({ type: "png", clip: { x: 0, y: 0, width, height }, optimizeForSpeed: true, omitBackground: true })
+        : await page.screenshot({ type: "jpeg", quality: 92, clip: { x: 0, y: 0, width, height }, optimizeForSpeed: true });
       if (!ff.stdin.write(buf)) await new Promise<void>((r) => ff.stdin.once("drain", () => r()));
       opts.onProgress?.((i + 1) / frames);
     }
@@ -179,8 +244,23 @@ export async function renderHtmlToVideo(opts: {
     throw err;
   } finally {
     await page.close().catch(() => undefined);
-    scheduleIdleClose();
   }
+}
+
+/** Kills headless Chromes left behind by a JANUXAI process that died (they hold memory). */
+export function cleanupOrphanChromes() {
+  try {
+    const root = chromeProfileRoot();
+    const out = execFileSync("ps", ["-eo", "pid=,ppid=,command="], { encoding: "utf8" });
+    for (const line of out.split("\n")) {
+      const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
+      if (!m || m[2] !== "1" || !m[3].includes(`--user-data-dir=${root}`)) continue;
+      try {
+        process.kill(Number(m[1]), "SIGKILL");
+      } catch {}
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  } catch {}
 }
 
 export const DESIGN_FORMATS = {

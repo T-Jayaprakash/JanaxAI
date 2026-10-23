@@ -12,10 +12,10 @@ import { makeThumbnail, probe } from "../media/probe";
 import { LANGUAGE_NAMES, speechConfig } from "../speech/transcribe";
 import type { EditSpec } from "../spec";
 import { freeDiskBytes, getStorage } from "../storage";
-import { addActivity, finishActivity, patchMeta } from "../agent/meta";
+import { addActivity, finishActivity, patchMeta, updateActivity } from "../agent/meta";
 import { analyzeAudio } from "./audio";
 import { checkFfmpegArgs } from "./ffmpegGuard";
-import { inputName, resolveInWorkspace, syncWorkspace } from "./workspace";
+import { inputName, resolveInWorkspace, syncWorkspace, workspaceDir } from "./workspace";
 import { runProcess } from "../media/ffmpeg";
 
 /**
@@ -31,6 +31,8 @@ export interface StudioContext {
   messageId: string;
   runId: string;
   shouldCancel: () => boolean;
+  /** Reports measured progress of the running step to the chat (0..1). */
+  progress?: (fraction: number, detail?: string) => void;
 }
 
 export interface ToolOutput {
@@ -54,6 +56,11 @@ function tool<S extends z.ZodTypeAny>(t: StudioTool<S>): StudioTool<S> {
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
+
+/** Titles sometimes arrive HTML-escaped ("B&amp;W"); show them as typed. */
+function decodeEntities(s: string): string {
+  return s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+}
 
 /** Friendly name for labels: in/ast_x.mp4 → the user's original file name. */
 function displayName(rel: string): string {
@@ -343,6 +350,7 @@ const renderAnimationTool = tool({
         transparent: input.transparent,
         outPath: out,
         shouldCancel: ctx.shouldCancel,
+        onProgress: (f) => ctx.progress?.(f, `Frame ${Math.round(f * input.duration * (input.fps ?? 30))} of ${Math.round(input.duration * (input.fps ?? 30))}`),
       });
     } catch (err) {
       return { text: `Render failed: ${err instanceof MediaError ? (err.diagnostic ?? err.userMessage).slice(-1500) : String(err)}`, isError: true };
@@ -356,8 +364,9 @@ const deliverTool = tool({
   description:
     "Hand the finished video to the user. Call only after checking it with view_frames. It is validated, converted to an H.264/AAC MP4 if needed, saved as a new version with download, and shown in the chat. Deliver each final video once.",
   schema: z.object({ path: RelPath, title: z.string().min(1).max(80) }),
-  label: (i) => `Delivering “${i.title}”`,
-  async run(input, ctx) {
+  label: (i) => `Delivering “${decodeEntities(i.title)}”`,
+  async run(rawInput, ctx) {
+    const input = { ...rawInput, title: decodeEntities(rawInput.title) };
     syncWorkspace(ctx.conversationId);
     const src = resolveInWorkspace(ctx.conversationId, input.path, { mustExist: true });
     const info = await probe(src);
@@ -467,9 +476,23 @@ export async function runStudioTool(name: string, input: unknown, ctx: StudioCon
   const label = t.label(parsed.data).slice(0, 120);
   const quiet = name === "list_media";
   const idx = quiet ? -1 : addActivity(ctx.messageId, label);
+  let lastProgress = 0;
+  const progress = (fraction: number, detail?: string) => {
+    if (quiet || Date.now() - lastProgress < 700) return;
+    lastProgress = Date.now();
+    updateActivity(ctx.messageId, idx, { progress: Math.max(0, Math.min(1, fraction)), detail });
+  };
   try {
-    const out = await t.run(parsed.data, ctx);
-    if (!quiet) finishActivity(ctx.messageId, idx, out.isError ? "failed" : "done", out.isError ? `${label} (retrying)` : label);
+    const out = await t.run(parsed.data, { ...ctx, progress });
+    if (!quiet) {
+      const root = workspaceDir(ctx.conversationId);
+      const images = (out.images ?? []).map((p) => path.relative(root, p)).filter((p) => p.startsWith("cache/"));
+      const firstLine = out.text.split("\n").find((l) => l.trim() && !/^Done\.?$/.test(l.trim())) ?? "";
+      finishActivity(ctx.messageId, idx, out.isError ? "failed" : "done", out.isError ? `${label} (retrying)` : label, {
+        images: images.length ? images : undefined,
+        detail: firstLine.slice(0, 200) || undefined,
+      });
+    }
     return out;
   } catch (err) {
     if (!quiet) finishActivity(ctx.messageId, idx, "failed");

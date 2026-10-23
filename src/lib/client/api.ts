@@ -42,7 +42,7 @@ export interface BrandKitView {
 export interface ReplyMeta {
   status?: "pending" | "streaming" | "done" | "error";
   provider?: string;
-  activity?: { label: string; status: "running" | "done" | "failed" }[];
+  activity?: { label: string; status: "running" | "done" | "failed"; at?: number; images?: string[]; detail?: string; progress?: number }[];
   designs?: { title: string; kind: string; format: string; assetIds: string[] }[];
   jobIds?: string[];
   deliveries?: { versionId: string; title: string }[];

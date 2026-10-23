@@ -33,6 +33,7 @@ import {
 import { takeHandoff } from "@/lib/client/handoff";
 import { DesignGallery } from "./DesignGallery";
 import { Markdown } from "./Markdown";
+import { ReplyTimeline, type TimelineStep } from "./ReplyTimeline";
 import { Composer, type ComposerHandle } from "./Composer";
 import { JobCard } from "./JobCard";
 import { LogoMark, Wordmark } from "./Logo";
@@ -376,8 +377,15 @@ export function JanuxApp() {
                     {m.role === "user" ? (
                       <UserMessage text={m.text} attachments={m.attachments.map((a) => snapshot!.assets[a]).filter(Boolean)} />
                     ) : (
-                      <AssistantMessage text={m.text} streaming={streaming} pending={meta.status === "pending" || (streaming && !m.text)} queued={meta.status === "pending" && messages.some((x) => x.id !== m.id && (x.meta as ReplyMeta)?.status === "streaming")}>
-                        {meta.activity && meta.activity.length > 0 && <ActivityList items={meta.activity} />}
+                      <AssistantMessage
+                        text={m.text}
+                        streaming={streaming}
+                        pending={meta.status === "pending" || (streaming && !m.text)}
+                        queued={meta.status === "pending" && messages.some((x) => x.id !== m.id && (x.meta as ReplyMeta)?.status === "streaming")}
+                        steps={meta.activity?.some((a) => a.at !== undefined) ? meta.activity : undefined}
+                        conversationId={m.conversationId}
+                      >
+                        {meta.activity && meta.activity.length > 0 && !meta.activity.some((a) => a.at !== undefined) && <ActivityList items={meta.activity} />}
                         {meta.status === "error" && meta.error && (
                           <p role="alert" className="mt-3 rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-sm">
                             {meta.error}
@@ -569,12 +577,17 @@ function AssistantMessage({
   streaming,
   pending,
   queued,
+  steps,
+  conversationId,
   children,
 }: {
   text: string;
   streaming?: boolean;
   pending?: boolean;
   queued?: boolean;
+  /** Work steps placed within the reply (studio agent). */
+  steps?: TimelineStep[];
+  conversationId?: string;
   children?: React.ReactNode;
 }) {
   return (
@@ -583,7 +596,17 @@ function AssistantMessage({
         <LogoMark size={26} />
       </div>
       <div className="min-w-0 flex-1">
-        {pending && !text ? (
+        {steps && conversationId ? (
+          <>
+            <ReplyTimeline text={text} steps={steps} streaming={!!streaming} conversationId={conversationId} />
+            {/* Between steps, before new words arrive: show that it's still thinking. */}
+            {streaming && !steps.some((s) => s.status === "running") && (steps.at(-1)?.at ?? 0) >= text.trimEnd().length && (
+              <p className="mt-2 flex items-center gap-2 text-sm text-muted">
+                <Sparkles size={14} className="animate-pulse text-accent" /> Thinking…
+              </p>
+            )}
+          </>
+        ) : pending && !text ? (
           <p className="flex items-center gap-2 text-sm text-muted">
             <Sparkles size={14} className="animate-pulse text-accent" /> {queued ? "Waiting for the previous reply to finish…" : "Thinking…"}
           </p>

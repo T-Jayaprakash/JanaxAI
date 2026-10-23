@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, ArrowUp, AudioLines, Film, ImageIcon, Loader2, Mic, Music, Paperclip, Square, X } from "lucide-react";
+import { AlertCircle, ArrowUp, AudioLines, Check, Film, ImageIcon, Loader2, Mic, Music, Paperclip, X } from "lucide-react";
 import { useEffect, useImperativeHandle, useRef, useState, useSyncExternalStore, type Ref } from "react";
 import { deleteUnsentUpload, formatBytes, formatDuration, uploadFile, type PublicAsset } from "@/lib/client/api";
 
@@ -35,6 +35,35 @@ export interface ComposerHandle {
 }
 
 const noopSubscribe = () => () => {};
+
+/** Languages for live dictation (Whisper auto-detects when it polishes the text). */
+const DICTATION_LANGS = [
+  { code: "ta-IN", label: "தமிழ்" },
+  { code: "en-IN", label: "EN" },
+  { code: "hi-IN", label: "हिंदी" },
+  { code: "ml-IN", label: "മലയാളം" },
+  { code: "te-IN", label: "తెలుగు" },
+];
+
+interface SpeechResultList {
+  length: number;
+  [i: number]: { isFinal: boolean; 0: { transcript: string } };
+}
+interface SpeechRecognitionLike {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  start: () => void;
+  stop: () => void;
+  onresult: ((e: { resultIndex: number; results: SpeechResultList }) => void) | null;
+  onerror: (() => void) | null;
+}
+
+function getSpeechCtor(): (new () => SpeechRecognitionLike) | null {
+  if (typeof window === "undefined") return null;
+  const w = window as unknown as { SpeechRecognition?: new () => SpeechRecognitionLike; webkitSpeechRecognition?: new () => SpeechRecognitionLike };
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
+}
 const canRecord = () => typeof window !== "undefined" && !!navigator.mediaDevices?.getUserMedia && typeof MediaRecorder !== "undefined";
 
 function pickRecorderType(): { mime: string; ext: string } {
@@ -71,11 +100,33 @@ export function Composer({
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [recording, setRecording] = useState<{ startedAt: number } | null>(null);
+  const [polishing, setPolishing] = useState(false);
+  const [lang, setLang] = useState("ta-IN");
   const [now, setNow] = useState(0);
   const recordSupported = useSyncExternalStore(noopSubscribe, canRecord, () => false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
+  const dictationRef = useRef<{ stream: MediaStream; speech: SpeechRecognitionLike | null; cancelled: boolean; before: string } | null>(null);
+
+  // Remember the dictation language between visits.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try {
+        const saved = localStorage.getItem("janux.dictationLang");
+        if (saved && DICTATION_LANGS.some((l) => l.code === saved)) setLang(saved);
+      } catch {}
+    }, 0);
+    return () => clearTimeout(t);
+  }, []);
+  const cycleLang = () => {
+    const i = DICTATION_LANGS.findIndex((l) => l.code === lang);
+    const next = DICTATION_LANGS[(i + 1) % DICTATION_LANGS.length].code;
+    setLang(next);
+    try {
+      localStorage.setItem("janux.dictationLang", next);
+    } catch {}
+  };
   const itemsRef = useRef(items);
   useEffect(() => {
     itemsRef.current = items;
@@ -153,46 +204,94 @@ export function Composer({
     await upload(accepted);
   };
 
-  const startRecording = async () => {
+  /**
+   * Dictation, like ChatGPT: words appear in the box while you speak (browser
+   * speech recognition), then the recording is re-transcribed locally with
+   * Whisper for a cleaner result you can edit before sending.
+   */
+  const startDictation = async () => {
     setNotice(null);
-    if (itemsRef.current.length >= maxFiles) {
-      setNotice(`You can attach up to ${maxFiles} files per message.`);
-      return;
-    }
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch {
-      setNotice("Microphone access was blocked. Allow it in your browser to record a voice note.");
+      setNotice("Microphone access was blocked. Allow it in your browser to dictate.");
       return;
     }
-    const { mime, ext } = pickRecorderType();
+    const before = text;
+    const base = text.trim() ? `${text.replace(/\s+$/, "")} ` : "";
+    let heard = "";
+    const { mime } = pickRecorderType();
     const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
     const chunks: Blob[] = [];
     rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-    rec.onstop = () => {
+
+    const Speech = getSpeechCtor();
+    let speech: SpeechRecognitionLike | null = null;
+    if (Speech) {
+      speech = new Speech();
+      speech.lang = lang;
+      speech.interimResults = true;
+      speech.continuous = true;
+      speech.onresult = (e) => {
+        let interim = "";
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const r = e.results[i];
+          if (r.isFinal) heard += `${r[0].transcript.trim()} `;
+          else interim += r[0].transcript;
+        }
+        setText(base + heard + interim);
+      };
+      speech.onerror = () => undefined; // live text is a bonus; Whisper still runs
+      try {
+        speech.start();
+      } catch {
+        speech = null;
+      }
+    }
+
+    rec.onstop = async () => {
       stream.getTracks().forEach((t) => t.stop());
+      try {
+        speech?.stop();
+      } catch {}
+      const state = dictationRef.current;
+      dictationRef.current = null;
       setRecording(null);
-      const type = (rec.mimeType || mime || "audio/webm").split(";")[0];
-      const blob = new Blob(chunks, { type });
-      if (blob.size < 2000) {
-        setNotice("That recording was too short.");
+      if (state?.cancelled) {
+        setText(state.before);
         return;
       }
-      const stamp = new Date().toTimeString().slice(0, 8).replace(/:/g, "");
-      const file = new File([blob], `voice-note-${stamp}.${ext}`, { type });
-      void upload([
-        {
-          file,
-          purpose: "voice",
-          item: { localId: crypto.randomUUID(), name: "Voice note", size: file.size, kind: "voice", previewUrl: URL.createObjectURL(file), duration: null, progress: 0, status: "uploading" },
-        },
-      ]);
+      const type = (rec.mimeType || mime || "audio/webm").split(";")[0];
+      const blob = new Blob(chunks, { type });
+      if (blob.size < 2000) return;
+      if (!voiceNotes) {
+        if (!heard.trim()) setNotice("I couldn't catch that. Try again a little closer to the mic.");
+        return;
+      }
+      setPolishing(true);
+      try {
+        const res = await fetch("/api/transcribe", { method: "POST", headers: { "Content-Type": type }, body: blob });
+        const body = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
+        if (res.ok && body.text) setText(base + body.text);
+        else if (!heard.trim()) setNotice(body.error ?? "I couldn't catch that. Try again a little closer to the mic.");
+      } catch {
+        if (!heard.trim()) setNotice("Couldn't transcribe that. Check your connection and try again.");
+      } finally {
+        setPolishing(false);
+        requestAnimationFrame(() => textareaRef.current?.focus());
+      }
     };
+    dictationRef.current = { stream, speech, cancelled: false, before };
     recorderRef.current = rec;
-    rec.start();
+    rec.start(1000);
     setNow(Date.now());
     setRecording({ startedAt: Date.now() });
+  };
+
+  const stopDictation = (cancel = false) => {
+    if (dictationRef.current) dictationRef.current.cancelled = cancel;
+    recorderRef.current?.stop();
   };
 
   const remove = (i: Pending) => {
@@ -216,7 +315,7 @@ export function Composer({
 
   const uploading = items.some((i) => i.status === "uploading" || i.status === "processing");
   const ready = items.filter((i) => i.status === "ready");
-  const canSend = !disabled && !sending && !uploading && !recording && (text.trim().length > 0 || ready.length > 0);
+  const canSend = !disabled && !sending && !uploading && !recording && !polishing && (text.trim().length > 0 || ready.length > 0);
 
   const submit = async () => {
     if (!canSend) return;
@@ -326,23 +425,7 @@ export function Composer({
         </p>
       )}
 
-      {recording ? (
-        <div className="flex items-center gap-3 p-2 pl-4">
-          <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-danger" aria-hidden="true" />
-          <span className="flex-1 text-sm text-ink">
-            Recording… <span className="font-mono text-muted">{formatDuration(recSeconds) || "0.0s"}</span>
-            <span className="ml-2 hidden text-xs text-faint sm:inline">Speak in any language</span>
-          </span>
-          <button
-            type="button"
-            onClick={() => recorderRef.current?.stop()}
-            className="inline-flex h-10 items-center gap-2 rounded-full bg-danger px-4 text-sm font-medium text-bg"
-            aria-label="Stop recording and attach voice note"
-          >
-            <Square size={14} /> Done
-          </button>
-        </div>
-      ) : (
+      {(
         <div className="flex items-end gap-1.5 p-2">
           <input
             ref={fileRef}
@@ -373,6 +456,7 @@ export function Composer({
             ref={textareaRef}
             rows={1}
             value={text}
+            readOnly={!!recording || polishing}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -386,20 +470,60 @@ export function Composer({
                 void addFiles(e.clipboardData.files);
               }
             }}
-            placeholder={items.length ? "How should I edit this?" : "Describe the video you want…"}
+            placeholder={recording ? "Listening… speak naturally" : items.length ? "How should I edit this?" : "Describe the video you want…"}
             className="max-h-[200px] min-h-10 flex-1 resize-none bg-transparent px-1 py-2.5 text-[15px] leading-6 text-ink placeholder:text-faint focus:outline-none focus-visible:outline-none"
           />
-          {recordSupported && voiceNotes && (
-            <button
-              type="button"
-              onClick={() => void startRecording()}
-              disabled={disabled}
-              aria-label="Record a voice note"
-              title="Record a voice note (any language)"
-              className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-muted hover:bg-card-2 hover:text-ink disabled:opacity-40"
-            >
-              <Mic size={18} />
-            </button>
+          {recording ? (
+            <>
+              <span className="flex h-10 shrink-0 items-center gap-1.5 px-1 font-mono text-xs text-muted" aria-live="polite">
+                <span className="h-2 w-2 animate-pulse rounded-full bg-danger" aria-hidden="true" />
+                {formatDuration(recSeconds) || "0.0s"}
+              </span>
+              <button
+                type="button"
+                onClick={() => stopDictation(true)}
+                aria-label="Cancel dictation"
+                className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-muted hover:bg-card-2 hover:text-ink"
+              >
+                <X size={18} />
+              </button>
+              <button
+                type="button"
+                onClick={() => stopDictation(false)}
+                aria-label="Finish dictation"
+                className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-ink text-bg hover:bg-accent-2"
+              >
+                <Check size={18} strokeWidth={2.6} />
+              </button>
+            </>
+          ) : polishing ? (
+            <span className="flex h-10 shrink-0 items-center gap-1.5 px-2 text-xs text-muted">
+              <Loader2 size={14} className="animate-spin" /> Polishing…
+            </span>
+          ) : (
+            recordSupported && (
+              <>
+                <button
+                  type="button"
+                  onClick={cycleLang}
+                  title="Dictation language (tap to change)"
+                  aria-label={`Dictation language: ${DICTATION_LANGS.find((l) => l.code === lang)?.label}`}
+                  className="h-8 shrink-0 self-center rounded-full border border-line px-2.5 text-[11px] text-muted hover:text-ink"
+                >
+                  {DICTATION_LANGS.find((l) => l.code === lang)?.label}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void startDictation()}
+                  disabled={disabled}
+                  aria-label="Dictate"
+                  title="Dictate: speak and your words appear here"
+                  className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-muted hover:bg-card-2 hover:text-ink disabled:opacity-40"
+                >
+                  <Mic size={18} />
+                </button>
+              </>
+            )
           )}
           <button
             type="button"

@@ -80,6 +80,8 @@ export const claudeCliBackend: AgentBackend = {
     delete env.CLAUDECODE;
     delete env.CLAUDE_CODE_ENTRYPOINT;
     delete env.ANTHROPIC_API_KEY; // this engine intentionally uses the developer's own login
+    // Renders and transcriptions can take many minutes; don't let the CLI time the tools out.
+    env.MCP_TOOL_TIMEOUT = String(60 * 60_000);
     const args = [
       "-p",
       "--output-format", "stream-json",

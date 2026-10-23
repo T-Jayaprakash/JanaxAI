@@ -8,6 +8,7 @@ import fs from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { getDb } from "../src/lib/db";
+import { closeBrowser } from "../src/lib/graphics/render";
 import { runStudioTool, STUDIO_TOOLS } from "../src/lib/studio/tools";
 
 const conversationId = process.env.JANUX_CONVERSATION_ID ?? "";
@@ -33,5 +34,18 @@ for (const t of STUDIO_TOOLS) {
     return { content, isError: !!out.isError };
   }) as never);
 }
+
+// Close Chrome when the reply ends, so no renderer is left running.
+let exiting = false;
+async function shutdown() {
+  if (exiting) return;
+  exiting = true;
+  await closeBrowser();
+  process.exit(0);
+}
+process.stdin.on("close", () => void shutdown());
+for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(sig, () => void shutdown());
+// A failed render must not take the whole tool server down.
+process.on("unhandledRejection", (err) => console.error("[mcp-studio] unhandled", err));
 
 void server.connect(new StdioServerTransport());

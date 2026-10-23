@@ -24,18 +24,35 @@ export function writeReplyText(messageId: string, text: string) {
 
 export function addActivity(messageId: string, label: string): number {
   let index = 0;
+  // Remember how much of the reply was written when this step began.
+  const row = getDb().prepare("SELECT length(text) AS n FROM messages WHERE id = ?").get(messageId) as { n: number } | undefined;
+  const at = row?.n ?? 0;
   patchMeta(messageId, (m) => {
-    const activity = [...(m.activity ?? []), { label, status: "running" as const }];
+    const activity = [...(m.activity ?? []), { label, status: "running" as const, at }];
     index = activity.length - 1;
     return { ...m, activity };
   });
   return index;
 }
 
-export function finishActivity(messageId: string, index: number, status: "done" | "failed", label?: string) {
+export function updateActivity(messageId: string, index: number, patch: { progress?: number; detail?: string }) {
   patchMeta(messageId, (m) => {
     const activity = [...(m.activity ?? [])];
-    if (activity[index]) activity[index] = { label: label ?? activity[index].label, status };
+    if (activity[index]) activity[index] = { ...activity[index], ...patch };
+    return { ...m, activity };
+  });
+}
+
+export function finishActivity(
+  messageId: string,
+  index: number,
+  status: "done" | "failed",
+  label?: string,
+  extra: { images?: string[]; detail?: string } = {},
+) {
+  patchMeta(messageId, (m) => {
+    const activity = [...(m.activity ?? [])];
+    if (activity[index]) activity[index] = { ...activity[index], label: label ?? activity[index].label, status, progress: undefined, ...extra };
     return { ...m, activity };
   });
 }

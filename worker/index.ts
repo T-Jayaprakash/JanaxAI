@@ -7,6 +7,7 @@ import { selectBackend } from "../src/lib/agent/provider";
 import { killActiveCliProcesses } from "../src/lib/agent/backends/cli";
 import { claimNextJob, recoverInterruptedJobs, setWorkerHeartbeat } from "../src/lib/jobs";
 import { processJob } from "../src/lib/render/pipeline";
+import { cleanupOrphanChromes, closeBrowser } from "../src/lib/graphics/render";
 
 let stopping = false;
 
@@ -15,6 +16,7 @@ async function main() {
   if (recovered.requeued || recovered.failed) {
     console.log(`[worker] recovered interrupted jobs: ${recovered.requeued} re-queued, ${recovered.failed} failed`);
   }
+  cleanupOrphanChromes();
   const interruptedReplies = recoverInterruptedAgentRuns();
   if (interruptedReplies) console.log(`[worker] marked ${interruptedReplies} interrupted assistant replies as failed`);
   setWorkerHeartbeat();
@@ -57,7 +59,8 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
     // Assistant replies are stopped so they don't keep running unattended.
     stopping = true;
     killActiveCliProcesses();
-    process.exit(0);
+    void closeBrowser().finally(() => process.exit(0));
+    setTimeout(() => process.exit(0), 2000).unref();
   });
 }
 

@@ -70,10 +70,22 @@ function assetLine(a: Asset): string {
   return `- ${parts.join(" · ")}`;
 }
 
+/** One visible step of the editor's work, placed in the reply where it happened. */
+export interface ActivityItem {
+  label: string;
+  status: "running" | "done" | "failed";
+  /** Length of the reply text when the step started, so the UI can interleave it. */
+  at?: number;
+  /** Workspace images the editor looked at (cache/...), shown as thumbnails. */
+  images?: string[];
+  detail?: string;
+  progress?: number;
+}
+
 export interface MessageMeta {
   status?: "pending" | "streaming" | "done" | "error";
   provider?: string;
-  activity?: { label: string; status: "running" | "done" | "failed" }[];
+  activity?: ActivityItem[];
   designs?: { title: string; kind: string; format: string; assetIds: string[] }[];
   jobIds?: string[];
   /** Videos the studio agent delivered in this reply. */

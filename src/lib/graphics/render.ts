@@ -157,8 +157,10 @@ async function pauseAnimationsAt(page: Page, ms: number) {
       const end = typeof timing?.endTime === "number" ? timing.endTime : t;
       a.currentTime = Math.min(t, Number.isFinite(end) ? end : t);
     }
-    const hook = (window as unknown as { __januxSeek?: (s: number) => void }).__januxSeek;
-    if (typeof hook === "function") hook(t / 1000);
+    const w = window as unknown as { __januxSeek?: (s: number) => void; __januxLibSeek?: (s: number) => void };
+    if (typeof w.__januxSeek === "function") w.__januxSeek(t / 1000);
+    // Library runtime (animated emoji) runs after the composition's own hook.
+    if (typeof w.__januxLibSeek === "function") w.__januxLibSeek(t / 1000);
   }, ms);
 }
 

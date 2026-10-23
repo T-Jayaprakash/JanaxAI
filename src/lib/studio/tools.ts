@@ -15,6 +15,11 @@ import { freeDiskBytes, getStorage } from "../storage";
 import { addActivity, finishActivity, patchMeta, updateActivity } from "../agent/meta";
 import { analyzeAudio } from "./audio";
 import { makeSoundEffect, makeVoiceover, SFX_DEFAULT_DURATION, SFX_TYPES } from "./audioGen";
+import { creditsFor, emojiRuntime, findEntry, fontFaceCss, libraryInstalled, searchLibrary } from "../library";
+import { buildCaptionHtml, CAPTION_STYLES, type CaptionWord } from "../library/captions";
+import { MEME_FORMATS } from "../library/memes";
+import { STICKERS } from "../library/stickers";
+import { OVERLAY_TRANSITIONS } from "../library/transitions";
 import { checkFfmpegArgs } from "./ffmpegGuard";
 import { inputName, resolveInWorkspace, syncWorkspace, workspaceDir } from "./workspace";
 import { runProcess } from "../media/ffmpeg";
@@ -304,6 +309,42 @@ const runFfmpegTool = tool({
   },
 });
 
+/**
+ * Readies a composition for rendering: inlines workspace images, embeds the
+ * library fonts it names, adds the animated-emoji runtime, and records which
+ * library assets were used (for licence credits on delivery).
+ */
+function prepareComposition(conversationId: string, html: string): string {
+  const withImages = inlineWorkspaceImages(conversationId, html);
+  const fonts = fontFaceCss(withImages);
+  const emoji = emojiRuntime(withImages);
+  recordUsedAssets(conversationId, [...fonts.used, ...emoji.used]);
+  const head = `${fonts.css ? `<style>${fonts.css}</style>` : ""}`;
+  return `${head}${withImages}${emoji.script}`;
+}
+
+function usedAssetsFile(conversationId: string) {
+  return resolveInWorkspace(conversationId, "cache/used-assets.json");
+}
+
+function recordUsedAssets(conversationId: string, ids: string[]) {
+  if (!ids.length) return;
+  const file = usedAssetsFile(conversationId);
+  let current: string[] = [];
+  try {
+    current = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {}
+  fs.writeFileSync(file, JSON.stringify([...new Set([...current, ...ids])]));
+}
+
+function readUsedAssets(conversationId: string): string[] {
+  try {
+    return JSON.parse(fs.readFileSync(usedAssetsFile(conversationId), "utf8"));
+  } catch {
+    return [];
+  }
+}
+
 /** Inline workspace images referenced from HTML (src="in/..." or url(work/...)). */
 function inlineWorkspaceImages(conversationId: string, html: string): string {
   return html.replace(/((?:in|work)\/[A-Za-z0-9._-]+\.(?:png|jpe?g|webp|gif|svg))/g, (m) => {
@@ -343,7 +384,7 @@ const renderAnimationTool = tool({
     const height = input.height - (input.height % 2);
     try {
       await renderHtmlToVideo({
-        html: inlineWorkspaceImages(ctx.conversationId, input.html),
+        html: prepareComposition(ctx.conversationId, input.html),
         width,
         height,
         duration: input.duration,
@@ -357,6 +398,159 @@ const renderAnimationTool = tool({
       return { text: `Render failed: ${err instanceof MediaError ? (err.diagnostic ?? err.userMessage).slice(-1500) : String(err)}`, isError: true };
     }
     return { text: `Rendered.\n${(await describeOutputs(ctx.conversationId, [input.output])).join("\n")}` };
+  },
+});
+
+const searchLibraryTool = tool({
+  name: "search_library",
+  description:
+    "Search JANUXAI's asset library: 80+ fonts (Tamil, Indian scripts, display, script), 58 xfade + 14 overlay transitions, 20 caption styles, animated stickers, 59 animated emoji, 30 sound effects, 10 colour looks (LUTs) and 12 meme formats. Search before designing so edits use professional assets. Returns ids and how to use each.",
+  schema: z.object({
+    query: z.string().max(200).describe("e.g. 'tamil bold headline font', 'glitch transition', 'karaoke captions', 'sale sticker', 'warm cinematic look'"),
+    kind: z.enum(["font", "transition", "caption_style", "sticker", "emoji", "sfx", "meme_format", "look"]).optional(),
+    limit: z.number().int().min(1).max(30).optional(),
+  }),
+  label: (i) => `Searching the library for “${i.query}”`,
+  async run(input) {
+    if (!libraryInstalled()) return { text: "The asset library isn't installed yet (npm run setup:library). Fonts from Google Fonts links still work.", isError: true };
+    const hits = searchLibrary(input.query, input.kind, input.limit ?? 12);
+    if (!hits.length) return { text: "Nothing matched. Try broader words, or a kind filter." };
+    return { text: hits.map((h) => `- ${h.id} — ${h.name}: ${h.description}\n  use: ${h.usage}`).join("\n") };
+  },
+});
+
+const getAssetTool = tool({
+  name: "get_asset",
+  description: "Get a library asset ready to use: a sticker's HTML snippet (with your text/colour/delay filled in), a meme format's full recipe, a caption style's settings, or a look/transition's details.",
+  schema: z.object({
+    id: z.string().max(80).describe("An id from search_library, e.g. sticker:price-tag"),
+    text: z.string().max(200).optional(),
+    color: z.string().max(40).optional(),
+    delay: z.number().min(0).max(120).optional().describe("Seconds into the composition when it appears"),
+  }),
+  label: (i) => `Getting ${i.id.split(":")[1] ?? i.id} from the library`,
+  async run(input) {
+    const [kind, key] = input.id.split(":");
+    if (kind === "sticker") {
+      const st = STICKERS.find((x) => x.id === key);
+      if (!st) return { text: "Unknown sticker.", isError: true };
+      const snippet = st.snippet
+        .replaceAll("{{text}}", (input.text ?? "TEXT").replace(/[<>]/g, ""))
+        .replaceAll("{{color}}", input.color ?? "#ff3b30")
+        .replaceAll("{{accent}}", input.color ?? "#ffd60a")
+        .replaceAll("{{delay}}", String(input.delay ?? 0));
+      return { text: `HTML snippet for render_animation (adjust position as needed):\n${snippet}` };
+    }
+    if (kind === "meme") {
+      const m = MEME_FORMATS.find((x) => x.id === key);
+      return m ? { text: `${m.name}: ${m.description}\nRecipe: ${m.recipe}` } : { text: "Unknown meme format.", isError: true };
+    }
+    if (kind === "caption") {
+      const c = CAPTION_STYLES.find((x) => x.id === key);
+      return c ? { text: `Caption style ${c.id}: ${JSON.stringify(c)}` } : { text: "Unknown caption style.", isError: true };
+    }
+    const entry = findEntry(input.id);
+    return entry ? { text: `${entry.name}: ${entry.description}\nuse: ${entry.usage}\nlicence: ${entry.license.name}` } : { text: "Unknown asset id.", isError: true };
+  },
+});
+
+const CaptionWordSchema = z.object({ w: z.string().max(80), s: z.number().min(0), e: z.number().min(0), emoji: z.string().max(40).optional() });
+
+const renderCaptionsTool = tool({
+  name: "render_captions",
+  description:
+    "Render animated captions from word timings with a professional preset (search_library kind caption_style). Words are kept whole, so Tamil renders correctly. Give either words, or transcript (the cache/words-*.json path from transcribe) plus segments (the source time ranges you kept, in output order) so timings follow your cut. Add emoji to words for animated emoji pops. Output: transparent .mov to overlay on the edit.",
+  schema: z.object({
+    preset: z.string().max(60),
+    words: z.array(CaptionWordSchema).max(3000).optional(),
+    transcript: RelPath.optional(),
+    segments: z.array(z.object({ start: z.number().min(0), end: z.number().min(0) })).max(400).optional(),
+    emojis: z.array(z.object({ word: z.string().max(80), emoji: z.string().max(40) })).max(60).optional().describe("Attach an animated emoji to the first caption word matching each text"),
+    width: z.number().int().min(64).max(2160),
+    height: z.number().int().min(64).max(3840),
+    duration: z.number().min(0.5).max(600),
+    fps: z.number().int().min(10).max(60).optional(),
+    color: z.string().max(30).optional(),
+    activeColor: z.string().max(30).optional(),
+    output: RelPath,
+  }),
+  label: () => "Animating captions",
+  async run(input, ctx) {
+    syncWorkspace(ctx.conversationId);
+    const style = CAPTION_STYLES.find((c) => c.id === input.preset);
+    if (!style) return { text: `Unknown caption preset "${input.preset}". Use search_library kind caption_style.`, isError: true };
+    if (!input.output.endsWith(".mov")) return { text: "Captions render to a transparent .mov.", isError: true };
+    let words: CaptionWord[] = input.words ?? [];
+    if (!words.length && input.transcript) {
+      const file = resolveInWorkspace(ctx.conversationId, input.transcript, { mustExist: true });
+      const data = JSON.parse(fs.readFileSync(file, "utf8")) as { words: CaptionWord[] };
+      words = data.words;
+      if (input.segments?.length) {
+        // Map source times onto the edited timeline.
+        const mapped: CaptionWord[] = [];
+        let offset = 0;
+        for (const seg of input.segments) {
+          for (const w of words) if (w.s >= seg.start - 0.02 && w.e <= seg.end + 0.08) mapped.push({ ...w, s: offset + (w.s - seg.start), e: offset + (Math.min(w.e, seg.end) - seg.start) });
+          offset += seg.end - seg.start;
+        }
+        words = mapped;
+      }
+    }
+    if (!words.length) return { text: "No words to caption. Pass words, or transcript (+ segments).", isError: true };
+    for (const em of input.emojis ?? []) {
+      const target = words.find((w) => !w.emoji && w.w.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "").includes(em.word.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "")));
+      if (target) target.emoji = em.emoji;
+    }
+    const { html } = buildCaptionHtml({ words, style, width: input.width, height: input.height, color: input.color, activeColor: input.activeColor });
+    const out = resolveInWorkspace(ctx.conversationId, input.output, { writable: true });
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    try {
+      await renderHtmlToVideo({
+        html: prepareComposition(ctx.conversationId, html),
+        width: input.width - (input.width % 2),
+        height: input.height - (input.height % 2),
+        duration: input.duration,
+        fps: input.fps ?? 30,
+        transparent: true,
+        outPath: out,
+        shouldCancel: ctx.shouldCancel,
+        onProgress: (f) => ctx.progress?.(f),
+      });
+    } catch (err) {
+      return { text: `Caption render failed: ${err instanceof MediaError ? (err.diagnostic ?? err.userMessage).slice(-800) : String(err)}`, isError: true };
+    }
+    recordUsedAssets(ctx.conversationId, [`caption:${style.id}`]);
+    return { text: `Captions rendered (${words.length} words, ${style.name}).\n${(await describeOutputs(ctx.conversationId, [input.output])).join("\n")}\nOverlay with: [0:v][1:v]overlay=0:0:format=auto` };
+  },
+});
+
+const renderTransitionTool = tool({
+  name: "render_transition",
+  description:
+    "Render an overlay transition (light-leak, film-burn, flash-white, dip-color, glitch, circle/diamond/star/heart-wipe, brush-wipe, split-slats, grid-squares, whip-streak, spotlight-iris) as a transparent .mov. It covers the screen at its midpoint: overlay it centred on a hard cut (shift with -itsoffset cut-duration/2 and overlay=eof_action=pass). Pair with a whoosh/swipe sound effect.",
+  schema: z.object({
+    style: z.string().max(40),
+    width: z.number().int().min(64).max(2160),
+    height: z.number().int().min(64).max(3840),
+    duration: z.number().min(0.2).max(4).optional(),
+    color: z.string().max(30).optional().describe("For wipes/dips; brand colour"),
+    fps: z.number().int().min(10).max(60).optional(),
+    output: RelPath,
+  }),
+  label: (i) => `Making a ${i.style} transition`,
+  async run(input, ctx) {
+    syncWorkspace(ctx.conversationId);
+    const def = OVERLAY_TRANSITIONS.find((t) => t.id === input.style);
+    if (!def) return { text: `Unknown transition "${input.style}". Options: ${OVERLAY_TRANSITIONS.map((t) => t.id).join(", ")}. For blends between two clips use xfade in run_ffmpeg.`, isError: true };
+    if (!input.output.endsWith(".mov")) return { text: "Overlay transitions render to a transparent .mov.", isError: true };
+    const d = input.duration ?? def.defaultDuration;
+    const w = input.width - (input.width % 2);
+    const h = input.height - (input.height % 2);
+    const out = resolveInWorkspace(ctx.conversationId, input.output, { writable: true });
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    await renderHtmlToVideo({ html: def.html(w, h, d, input.color ?? "#111111"), width: w, height: h, duration: d, fps: input.fps ?? 30, transparent: true, outPath: out, shouldCancel: ctx.shouldCancel });
+    recordUsedAssets(ctx.conversationId, [`transition:${def.id}`]);
+    return { text: `Transition ready: ${input.output} (${d}s, fully covering at ${(d / 2).toFixed(2)}s).` };
   },
 });
 
@@ -425,7 +619,8 @@ const deliverTool = tool({
       height: final.height!,
     });
     getDb().prepare("UPDATE messages SET version_id = ?, updated_at = ? WHERE id = ?").run(version.id, now(), ctx.messageId);
-    patchMeta(ctx.messageId, (m) => ({ ...m, deliveries: [...(m.deliveries ?? []), { versionId: version.id, title: input.title }] }));
+    const credits = creditsFor(readUsedAssets(ctx.conversationId)).map((c) => c.license.attribution!);
+    patchMeta(ctx.messageId, (m) => ({ ...m, deliveries: [...(m.deliveries ?? []), { versionId: version.id, title: input.title, ...(credits.length ? { credits } : {}) }] }));
     touchConversation(ctx.conversationId);
     // The delivered file is now an input for later revisions.
     syncWorkspace(ctx.conversationId);
@@ -506,6 +701,10 @@ export const STUDIO_TOOLS = [
   writeFileTool,
   runFfmpegTool,
   renderAnimationTool,
+  renderCaptionsTool,
+  renderTransitionTool,
+  searchLibraryTool,
+  getAssetTool,
   voiceoverTool,
   sfxTool,
   deliverTool,

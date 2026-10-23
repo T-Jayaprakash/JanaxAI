@@ -24,6 +24,7 @@ Requirements:
 ```bash
 npm install
 npm run setup:speech   # optional: local voice-note transcription (whisper.cpp + ~466 MB model)
+npm run setup:library  # fonts, animated emoji, colour looks, sound effects (~35 MB)
 npm run dev
 ```
 
@@ -68,6 +69,18 @@ npm run build && npm start   # production mode, still local
 ## What works today
 
 With an AI engine, JANUXAI works as a **video studio**: you ask for any video in your own words or language, and Claude edits it like a human editor would. It watches the footage as frames, listens to the speech with word timings, finds the beat of your song, and cuts with FFmpeg. It builds captions, emojis, titles and motion graphics as HTML animations, checks frames of its own render, and delivers an MP4. See [docs/AI_PROVIDERS.md](docs/AI_PROVIDERS.md#the-studio-toolkit).
+
+**Professional asset library** ([docs/ASSET_LIBRARY.md](docs/ASSET_LIBRARY.md)), searchable by the editor and browsable in the studio's Library panel:
+
+- 82 font families, including Tamil and other Indian scripts
+- 58 xfade + 14 overlay transitions
+- 20 caption styles, with Tamil kept whole
+- 19 animated stickers and 59 animated emoji
+- 30 sound effects
+- 10 colour looks
+- 12 meme formats
+
+Licences are tracked, and required credits are added to deliveries automatically.
 
 Verified live with the local Claude engine:
 

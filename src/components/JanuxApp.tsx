@@ -32,6 +32,7 @@ import {
 } from "@/lib/client/api";
 import { takeHandoff } from "@/lib/client/handoff";
 import { DesignGallery } from "./DesignGallery";
+import { LibraryPanel } from "./LibraryPanel";
 import { Markdown } from "./Markdown";
 import { ReplyTimeline, type TimelineStep } from "./ReplyTimeline";
 import { Composer, type ComposerHandle } from "./Composer";
@@ -63,7 +64,7 @@ export function JanuxApp() {
   const [loading, setLoading] = useState(true);
   /** null = automatic (shown on desktop, hidden on mobile). */
   const [sidebarOpen, setSidebarOpen] = useState<boolean | null>(null);
-  const [panel, setPanel] = useState<null | "projects" | "account">(null);
+  const [panel, setPanel] = useState<null | "projects" | "account" | "library">(null);
   const [workerAlive, setWorkerAlive] = useState<boolean | null>(null);
   const [limits, setLimits] = useState({ maxUploadMB: 300, maxFiles: 10 });
   const [status, setStatus] = useState<AppStatus | null>(null);
@@ -310,6 +311,9 @@ export function JanuxApp() {
             </h1>
           )}
           <div className="ml-auto flex items-center gap-1">
+            <button onClick={() => setPanel("library")} className="rounded-lg px-2.5 py-1.5 text-xs text-muted hover:bg-card hover:text-ink">
+              Library
+            </button>
             <button
               onClick={() => setPanel("projects")}
               className="hidden rounded-lg px-2.5 py-1.5 text-xs text-muted hover:bg-card hover:text-ink sm:block"
@@ -436,16 +440,23 @@ export function JanuxApp() {
                             </div>
                           );
                         })}
-                        {delivered.map((v) => (
-                          <VideoResult
-                            key={v.id}
-                            version={v}
-                            versions={versions}
-                            showSuggestions={false}
-                            onSend={(t) => void send(t, [])}
-                            onRequestChanges={() => composerRef.current?.focus()}
-                          />
-                        ))}
+                        {delivered.map((v) => {
+                          const credits = meta.deliveries?.find((d) => d.versionId === v.id)?.credits;
+                          return (
+                            <div key={v.id}>
+                              <VideoResult
+                                version={v}
+                                versions={versions}
+                                showSuggestions={false}
+                                onSend={(t) => void send(t, [])}
+                                onRequestChanges={() => composerRef.current?.focus()}
+                              />
+                              {credits && credits.length > 0 && (
+                                <p className="mt-2 text-[11px] text-faint">Credits to include when posting: {credits.join(" · ")}</p>
+                              )}
+                            </div>
+                          );
+                        })}
                         {shownVersion && (
                           <VideoResult
                             version={shownVersion}
@@ -511,6 +522,15 @@ export function JanuxApp() {
         )}
       </main>
 
+      {panel === "library" && (
+        <LibraryPanel
+          onClose={() => setPanel(null)}
+          onUse={(text) => {
+            setPanel(null);
+            composerRef.current?.setText(text);
+          }}
+        />
+      )}
       {panel === "projects" && <ProjectsPanel conversations={conversations} onOpen={openConversation} onDelete={deleteConv} onClose={() => setPanel(null)} />}
       {panel === "account" && (
         <AccountPanel

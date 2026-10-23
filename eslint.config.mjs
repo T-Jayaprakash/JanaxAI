@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Runtime data (uploads, renders, the asset library, Chrome profiles).
+    "data/**",
   ]),
 ]);
 

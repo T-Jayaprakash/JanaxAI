@@ -33,6 +33,11 @@ export function checkFfmpegArgs(raw: string[]): FfmpegPlan {
   for (const t of raw) {
     const tok = String(t);
     if (tok.length > 20000) throw new Error("An argument is too long.");
+    // Filters that read files (LUTs) may only use workspace or library paths.
+    for (const m of tok.matchAll(/(?:lut3d|lut1d|haldclut)=(?:file=)?([^:,;\]\s]+)/g)) {
+      const f = m[1].replace(/^'|'$/g, "");
+      if (f.startsWith("/") || f.includes("..") || !/^(lib|work|cache|in)\//.test(f)) throw new Error(`LUT file "${f}" must be inside the workspace or lib/.`);
+    }
     if (FORBIDDEN_OPTIONS.has(tok)) throw new Error(`The option ${tok} isn't allowed.`);
     const lower = tok.toLowerCase();
     for (const bad of FORBIDDEN_SUBSTRINGS) {
@@ -62,8 +67,8 @@ export function checkFfmpegArgs(raw: string[]): FfmpegPlan {
   if (concatDemuxer && safeZero) throw new Error("The concat demuxer must keep -safe 1.");
   if (!outputs.length) throw new Error("No output file found. End the arguments with an output path under work/.");
   for (const p of [...inputs, ...outputs]) {
-    if (p.startsWith("/") || p.split("/").includes("..") || !/^(in|work|cache)\//.test(p)) {
-      throw new Error(`Path "${p}" must be inside the workspace (in/, work/ or cache/).`);
+    if (p.startsWith("/") || p.split("/").includes("..") || !/^(in|work|cache|lib)\//.test(p)) {
+      throw new Error(`Path "${p}" must be inside the workspace (in/, work/, cache/ or lib/).`);
     }
   }
   for (const o of outputs) {

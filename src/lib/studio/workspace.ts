@@ -25,6 +25,10 @@ export function inputName(a: Asset): string {
 export function syncWorkspace(conversationId: string, extraAssetIds: string[] = []): { dir: string; assets: Asset[] } {
   const dir = workspaceDir(conversationId);
   for (const sub of ["in", "work", "cache"]) fs.mkdirSync(path.join(/*turbopackIgnore: true*/ dir, sub), { recursive: true });
+  // lib/ = the shared asset library (fonts, looks, sound effects), read-only.
+  const lib = path.join(/*turbopackIgnore: true*/ dir, "lib");
+  const libTarget = path.join(/*turbopackIgnore: true*/ getConfig().dataDir, "library");
+  if (fs.existsSync(libTarget) && !fs.existsSync(lib)) fs.symlinkSync(libTarget, lib);
   const ids = (getDb().prepare("SELECT id FROM assets WHERE conversation_id = ? ORDER BY created_at").all(conversationId) as { id: string }[]).map((r) => r.id);
   const storage = getStorage();
   const assets: Asset[] = [];
@@ -43,7 +47,7 @@ export function syncWorkspace(conversationId: string, extraAssetIds: string[] = 
   return { dir, assets };
 }
 
-const SAFE_REL = /^(in|work|cache)\/[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
+const SAFE_REL = /^(in|work|cache|lib)\/[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
 
 /** Resolves a workspace-relative path, rejecting anything that escapes it. */
 export function resolveInWorkspace(conversationId: string, rel: string, opts: { mustExist?: boolean; writable?: boolean } = {}): string {

@@ -15,7 +15,7 @@ export async function GET() {
 
 export async function PUT(req: Request) {
   const parsed = BrandKitSchema.partial().safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return jsonError(400, "Some brand details are invalid. Colors must look like #F2A33A.");
+  if (!parsed.success) return jsonError(400, "Some brand details are invalid. Colors must look like #1A1A1A.");
   if (parsed.data.logoAssetId) {
     const a = getAsset(parsed.data.logoAssetId);
     if (!a || a.mediaType !== "image") return jsonError(400, "The logo must be an uploaded image.");

@@ -32,7 +32,7 @@ export function PricingPlans() {
         {PLANS.map((p) => (
           <div
             key={p.id}
-            className={`relative flex flex-col rounded-3xl border p-6 ${p.highlight ? "border-accent/60 bg-card shadow-[0_20px_60px_-25px_rgba(242,163,58,0.45)]" : "border-line bg-card/60"}`}
+            className={`relative flex flex-col rounded-3xl border p-6 ${p.highlight ? "border-accent/60 bg-card shadow-[0_20px_60px_-25px_rgba(255,255,255,0.18)]" : "border-line bg-card/60"}`}
           >
             {p.highlight && (
               <span className="absolute -top-3 left-6 rounded-full bg-accent px-3 py-0.5 text-xs font-semibold text-bg">Most popular</span>

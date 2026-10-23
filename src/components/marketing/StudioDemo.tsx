@@ -87,17 +87,17 @@ export function StudioDemo() {
             className={`absolute inset-0 transition-opacity duration-700 ${showVideo ? "opacity-100" : "opacity-30"}`}
             style={{
               background:
-                "radial-gradient(80% 60% at 30% 25%, #f7c27a 0%, transparent 60%), radial-gradient(70% 60% at 75% 70%, #b8452c 0%, transparent 65%), linear-gradient(160deg, #3a1f12, #1a0f0a)",
+                "radial-gradient(80% 60% at 30% 25%, #d4d4d4 0%, transparent 60%), radial-gradient(70% 60% at 75% 70%, #525252 0%, transparent 65%), linear-gradient(160deg, #2a2a2a, #0d0d0d)",
             }}
           />
           <div className="absolute inset-x-6 top-[22%] h-24 rounded-2xl bg-white/10 blur-[1px]" />
-          <div className="absolute bottom-[26%] left-1/2 h-20 w-20 -translate-x-1/2 rounded-full bg-[#f2a33a]/30 blur-xl" />
+          <div className="absolute bottom-[26%] left-1/2 h-20 w-20 -translate-x-1/2 rounded-full bg-white/20 blur-xl" />
           {showVideo && word >= 0 && (
             <div className="absolute inset-x-3 bottom-[18%] text-center">
               <span className="block text-2xl drop-shadow">{WORDS[word].e}</span>
               <span
                 key={word}
-                className="inline-block animate-rise font-sans text-[22px] font-extrabold uppercase tracking-tight text-[#ffc46b]"
+                className="inline-block animate-rise font-sans text-[22px] font-extrabold uppercase tracking-tight text-white"
                 style={{ textShadow: "0 3px 0 #000, 0 0 12px rgba(0,0,0,.6)", WebkitTextStroke: "1px #000" }}
               >
                 {WORDS[word].w}

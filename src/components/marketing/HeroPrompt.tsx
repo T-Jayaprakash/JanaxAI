@@ -59,7 +59,7 @@ export function HeroPrompt() {
           setDragging(false);
           setFiles((f) => [...f, ...Array.from(e.dataTransfer.files)].slice(0, 10));
         }}
-        className={`rounded-3xl border bg-card/90 p-3 text-left shadow-[0_20px_80px_-20px_rgba(242,163,58,0.25)] backdrop-blur transition-colors ${
+        className={`rounded-3xl border bg-card/90 p-3 text-left shadow-[0_20px_80px_-20px_rgba(255,255,255,0.12)] backdrop-blur transition-colors ${
           dragging ? "border-accent" : "border-line-strong focus-within:border-accent/60"
         }`}
       >

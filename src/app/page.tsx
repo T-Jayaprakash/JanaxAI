@@ -39,7 +39,7 @@ export default function Home() {
             <h1 className="text-balance mx-auto mt-6 max-w-4xl font-display text-[44px] font-medium leading-[1.02] tracking-tight sm:text-7xl">
               Just tell it.
               <br />
-              <span className="italic text-accent">It&apos;ll make the video.</span>
+              <span className="italic text-muted">It&apos;ll make the video.</span>
             </h1>
             <p className="text-balance mx-auto mt-5 max-w-xl text-base text-muted sm:text-lg">
               The AI video editor you talk to. Drop your raw footage, say what you want in your own language, and get a finished reel with captions, music and motion graphics.
@@ -54,7 +54,7 @@ export default function Home() {
         <section className="border-y border-line/60 bg-bg-2/40">
           <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
             <div className="mb-10 text-center">
-              <p className="text-xs font-medium uppercase tracking-[0.2em] text-accent">The studio</p>
+              <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted">The studio</p>
               <h2 className="text-balance mt-3 font-display text-3xl font-medium tracking-tight sm:text-5xl">An editor that watches, listens and cuts.</h2>
               <p className="text-balance mx-auto mt-4 max-w-2xl text-muted">
                 JANUXAI looks at your footage, hears every word, finds the beat of your song, and edits the way a good editor would. It checks its own work before you see it.
@@ -68,7 +68,7 @@ export default function Home() {
         <section className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-24">
           <div className="grid items-center gap-10 md:grid-cols-2">
             <div>
-              <p className="text-xs font-medium uppercase tracking-[0.2em] text-accent">Your language</p>
+              <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted">Your language</p>
               <h2 className="text-balance mt-3 font-display text-3xl font-medium tracking-tight sm:text-5xl">Say it the way you say it.</h2>
               <p className="mt-4 text-muted">
                 No editing words to learn. Talk in Tamil, mix in English, or send a voice note while you&apos;re still at the shop. JANUXAI understands, and replies in your language.
@@ -117,7 +117,7 @@ export default function Home() {
         {/* Features */}
         <section id="features" className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-24">
           <div className="max-w-2xl">
-            <p className="text-xs font-medium uppercase tracking-[0.2em] text-accent">What it does</p>
+            <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted">What it does</p>
             <h2 className="text-balance mt-3 font-display text-3xl font-medium tracking-tight sm:text-5xl">Everything a reel needs. None of the timeline.</h2>
           </div>
           <div className="mt-12 grid gap-px overflow-hidden rounded-3xl border border-line bg-line sm:grid-cols-2 lg:grid-cols-3">
